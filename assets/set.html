@@ -119,12 +119,17 @@
           <el-col :span="24">
             <el-form-item>
               <el-row :gutter="12">
-                <el-col span="12">
+                <el-col span="8">
+                  <el-button size="small" @click="testPrint">
+                    测试打印
+                  </el-button>
+                </el-col>
+                <el-col span="8">
                   <el-button type="primary" size="small" @click="submit">
                     应用
                   </el-button>
                 </el-col>
-                <el-col span="12">
+                <el-col span="8">
                   <el-button size="small" @click="close">
                     关闭
                   </el-button>
@@ -166,6 +171,7 @@
             formData: {
               port: 17521,
               token: "",
+              printer: "",
               pluginVersion: "",
               openAtLogin: false,
               openAsHidden: false,
@@ -197,6 +203,7 @@
               },
             ],
             downloadedVersions: [], // 存储已下载版本
+            printerList: [], // 打印机列表
           };
         },
         computed: {
@@ -245,6 +252,18 @@
                       trigger: "blur",
                     },
                   ],
+                },
+                {
+                  label: "打印机列表",
+                  prop: "printer",
+                  is: "el-select",
+                  optionIs: "el-option",
+                  attrs: {
+                    filterable: false,
+                    defaultFirstOption: true,
+                  },
+                  options: this.printerList,
+                  display: this.setTab === "basicSet",
                 },
                 {
                   label: "插件版本设置",
@@ -497,6 +516,7 @@
           // 获取配置
           this.formData = store.store;
           this.getVersions();
+          this.getPrinters();
         },
         mounted() {
           this.handleTabChange();
@@ -517,6 +537,29 @@
                 height,
               });
             });
+          },
+          getPrinters() {
+            ipc.send('getPrinterList');
+            ipc.on('printerList', (event, printers) => {
+              this.printerList = printers.map(printer => ({
+                value: printer.name,
+                label: printer.name
+              }));
+            });
+          },
+          async testPrint() {
+            const tempalteHtml = '<div style="height: 20px; width: 100%;">测试打印</div>';
+            data = {
+              printBackground: false,
+              color: false,
+              templateId: 'tmpid-' + new Date().getTime(),
+              socketId: 'sid-' + new Date().getTime(),
+              clientType: 'local',
+              html: tempalteHtml,
+              pageNum: 1,
+            };
+            if(this.formData.printer) data.printer = this.formData.printer;
+            ipc.send('print-new-test', data);
           },
           /**
            * @description: 测试连接

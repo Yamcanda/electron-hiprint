@@ -230,7 +230,7 @@ async function createWindow() {
         MAIN_WINDOW.webContents.openDevTools();
       }
       // 本地服务开启端口监听
-      server.listen(store.get("port") || 17521);
+      server.listen({port: store.get("port") || 17521, host: '0.0.0.0'});
       // 初始化本地 服务端事件
       initServeEvent(ioServer);
       // 有配置中转服务时连接中转服务
@@ -325,7 +325,7 @@ function initTray() {
       },
     },
     {
-      label: "软件日志",
+      label: "日志",
       click: () => {
         shell.openPath(app.getPath("logs"));
       },

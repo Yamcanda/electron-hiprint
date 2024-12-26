@@ -49,7 +49,20 @@ async function createPrintWindow() {
  * @return {Void}
  */
 function initPrintEvent() {
+  ipcMain.on("getPrinterList", (event) => {
+    PRINT_WINDOW.webContents.getPrintersAsync().then(printers => {
+      event.sender.send('printerList', printers);
+    });
+  });
+
+  ipcMain.on("print-new-test", async (event, data) => {
+    console.info(data);
+    PRINT_WINDOW.webContents.send("print-new", data);
+  });
+
   ipcMain.on("do", async (event, data) => {
+    // log(`${data.html}`); // for debug
+    var st = new Date().getTime();
     let socket = null;
     if (data.clientType === "local") {
       socket = SOCKET_SERVER.sockets.sockets.get(data.socketId);
@@ -276,12 +289,13 @@ function initPrintEvent() {
       },
       (success, failureReason) => {
         if (success) {
+          var printTime = (new Date().getTime()) - st;
           log(
             `${data.replyId ? "中转服务" : "插件端"} ${socket?.id} 模板 【${
               data.templateId
             }】 打印成功，打印类型 HTML，打印机：${deviceName}，页数：${
               data.pageNum
-            }`,
+            }，time: ${printTime}`,
           );
           logPrintResult("success");
         } else {
@@ -311,9 +325,9 @@ function initPrintEvent() {
         }
         // 通过 taskMap 调用 task done 回调
         if (data.taskId) {
-          PRINT_RUNNER_DONE[data.taskId]();
+          PRINT_RUNNER_DONE[data.taskId] && PRINT_RUNNER_DONE[data.taskId]();
           // 删除 task
-          delete PRINT_RUNNER_DONE[data.taskId];
+          delete (PRINT_RUNNER_DONE[data.taskId] && PRINT_RUNNER_DONE[data.taskId]);
         }
         MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
       },
