@@ -136,6 +136,27 @@ function initPrintEvent() {
           }
         },
       );
+
+      db.get(
+        `SELECT COUNT(*) AS count FROM print_logs`,
+        (err, row) => {
+          if (err) {
+            console.error("Failed to log print result", err);
+            return;
+          }
+          
+          if (row.count > 100) {
+            db.run(`DELETE FROM print_logs WHERE id IN (SELECT id FROM print_logs ORDER BY id ASC LIMIT ?)`,
+              [row.count - 100],
+              (err) => {
+                if (err) {
+                  console.error("Failed to cleanup old print logs", err);
+                }
+              }
+            );
+          }
+        },
+      );
     };
 
     // pdf 打印
