@@ -72,6 +72,10 @@
 
       document.title = store.get("mainTitle") || "Electron-hiprint";
 
+      const pv = store.get("pluginVersion");
+      if(pv === undefined || pv === null || pv === "" || pv === 0) {
+        store.set("pluginVersion", "0.0.58-fix");
+      }
       let ipc = ipcRenderer;
       new Vue({
         el: "#app",

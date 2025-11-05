@@ -187,19 +187,19 @@
             // 预制的版本，解决部分内网无法获取新版本的问题
             versions: [
               {
-                version: "0.0.58-fix",
+                value: "0.0.58-fix",
                 updateTime: "2024/11/03 21:23:54",
               },
               {
-                version: "0.0.56",
+                value: "0.0.56",
                 updateTime: "2023/11/19 22:43:45",
               },
               {
-                version: "0.0.54-fix",
+                value: "0.0.54-fix",
                 updateTime: "2023/07/10 10:34:19",
               },
               {
-                version: "0.0.52",
+                value: "0.0.52",
                 updateTime: "2023/05/08 17:57:53",
               },
             ],
@@ -313,9 +313,9 @@
                       const isDownloaded = this.downloadedVersions.includes(
                         val,
                       );
-                      if (!isDownloaded) {
-                        ipc.send("downloadPlugin", val);
-                      }
+                      // if (!isDownloaded) {
+                      //   ipc.send("downloadPlugin", val);
+                      // }
                     },
                   },
                   display: this.setTab === "basicSet",
@@ -514,7 +514,7 @@
           this.onEvents();
           // 获取配置
           this.formData = store.store;
-          this.getVersions();
+          // this.getVersions();
           this.getPrintersList();
         },
         mounted() {
@@ -525,9 +525,9 @@
         },
         methods: {
           onEvents() {
-              ipcRenderer.on("downloadedVersions", (event, versions) => {
-              this.downloadedVersions = versions;
-            })
+            //   ipcRenderer.on("downloadedVersions", (event, versions) => {
+            //   this.downloadedVersions = versions;
+            // })
               ipcRenderer.on("getPrintersList", (event, printers) => {
               this.printerList = printers;
             })

@@ -338,7 +338,7 @@ function initPrintEvent() {
               templateId: data.templateId,
               replyId: data.replyId,
             };
-            socket.emit("successs", result); // 兼容 vue-plugin-hiprint 0.0.56 之前包
+            //socket.emit("successs", result); // 兼容 vue-plugin-hiprint 0.0.56 之前包
             socket.emit("success", result);
           } else {
             socket.emit("error", {

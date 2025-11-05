@@ -20,7 +20,6 @@
     <script>
       const { ipcRenderer } = require("electron");
       const Store = require("electron-store");
-
       const store = new Store();
 
       window.$ = window.jQuery = require("jquery");
@@ -38,6 +37,11 @@
       $(document).ready(function() {
         const script = document.createElement("script");
         script.setAttribute("type", "text/javascript");
+
+        const pv = store.get("pluginVersion");
+        if(pv === undefined || pv === null || pv === "" || pv === 0) {
+          store.set("pluginVersion", "0.0.58-fix");
+        }
 
         // 加载插件
         let scriptSrc = `../plugin/${store.get(
