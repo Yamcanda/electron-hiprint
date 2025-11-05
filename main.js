@@ -14,6 +14,7 @@ const {
   Menu,
   shell,
 } = require("electron");
+const electronLog = require("electron-log");
 const path = require("path");
 const server = require("http").createServer();
 const helper = require("./src/helper");
@@ -21,15 +22,40 @@ const printSetup = require("./src/print");
 const renderSetup = require("./src/render");
 const setSetup = require("./src/set");
 const printLogSetup = require("./src/printLog");
-const log = require("./tools/log");
 const {
   store,
   address,
   initServeEvent,
   initClientEvent,
+  getMachineId,
+  showAboutDialog,
 } = require("./tools/utils");
-const { machineIdSync } = require("node-machine-id");
+
 const TaskRunner = require("concurrent-tasks");
+const dayjs = require("dayjs");
+
+const logPath = store.get("logPath") || app.getPath("logs");
+
+Object.assign(console, electronLog.functions);
+
+electronLog.transports.file.resolvePathFn = () =>
+  path.join(logPath, dayjs().format("YYYY-MM-DD.log"));
+
+// 监听崩溃事件
+process.on("uncaughtException", (error) => {
+  console.error(error);
+});
+
+// 监听渲染进程崩溃
+app.on("web-contents-created", (event, contents) => {
+  contents.on("render-process-gone", (event, details) => {
+    console.error(details.reason);
+  });
+});
+
+if (store.get("disabledGpu")) {
+  app.commandLine.appendSwitch("disable-gpu");
+}
 
 // 主进程
 global.MAIN_WINDOW = null;
@@ -100,8 +126,6 @@ async function initialize() {
     helper.appQuit();
   }
 
-  app.setAppLogsPath(store.get("logPath"));
-
   // 当运行第二个实例时,聚焦到 MAIN_WINDOW 这个窗口
   app.on("second-instance", () => {
     if (MAIN_WINDOW) {
@@ -125,12 +149,8 @@ async function initialize() {
 
   // 获取设备唯一id
   ipcMain.on("getMachineId", (event) => {
-    try {
-      const machineId = machineIdSync({ original: true });
-      event.sender.send("machineId", machineId);
-    } catch (error) {
-      event.sender.send("machineId", "");
-    }
+    const machineId = getMachineId();
+    event.sender.send("machineId", machineId);
   });
 
   // 获取设备ip、mac等信息
@@ -152,7 +172,7 @@ async function initialize() {
         createWindow();
       }
     });
-    log("==> Electron-hiprint 启动 <==");
+    console.log("==> Electron-hiprint 启动 <==");
   });
 }
 
@@ -167,8 +187,8 @@ async function createWindow() {
     title: store.get("mainTitle") || "Electron-hiprint",
     useContentSize: true, // 窗口大小不包含边框
     center: true, // 居中
-    resizable: false, // 不可缩放
-    show: store.get("openAsHidden") ? false : true, // 显示
+    resizable: false, // 禁止窗口缩放
+    show: false, // 初始隐藏
     webPreferences: {
       // 设置此项为false后，才可在渲染进程中使用 electron api
       contextIsolation: false,
@@ -225,6 +245,9 @@ async function createWindow() {
   // 主窗口 Dom 加载完毕
   MAIN_WINDOW.webContents.on("dom-ready", async () => {
     try {
+      if (!store.get("openAsHidden")) {
+        MAIN_WINDOW.show();
+      }
       // 未打包时打开开发者工具
       if (!app.isPackaged) {
         MAIN_WINDOW.webContents.openDevTools();
@@ -291,6 +314,7 @@ function loadingView(windowOptions) {
 
   // 主窗口 dom 加载完毕，移除 loadingBrowserView
   MAIN_WINDOW.webContents.on("dom-ready", async (event) => {
+    loadingBrowserView.webContents.destroy();
     MAIN_WINDOW.removeBrowserView(loadingBrowserView);
   });
 }
@@ -302,6 +326,26 @@ function loadingView(windowOptions) {
 function systemSetup() {
   // 隐藏菜单栏
   Menu.setApplicationMenu(null);
+}
+
+/**
+ * @description: 显示主窗口
+ * @return {Void}
+ */
+function showMainWindow() {
+  if (MAIN_WINDOW.isMinimized()) {
+    // 将窗口从最小化状态恢复到以前的状态
+    MAIN_WINDOW.restore();
+  }
+  if (!MAIN_WINDOW.isVisible()) {
+    // 主窗口关闭不会被销毁，只是隐藏，重新显示即可
+    MAIN_WINDOW.show();
+  }
+  if (!MAIN_WINDOW.isFocused()) {
+    // 主窗口未聚焦，使其聚焦
+    MAIN_WINDOW.focus();
+  }
+  MAIN_WINDOW.setSkipTaskbar(false);
 }
 
 /**
@@ -319,20 +363,30 @@ function initTray() {
   // 托盘菜单
   const trayMenuTemplate = [
     {
+      // 神知道为什么 linux 上无法识别 tray click、double-click，只能添加一个菜单
+      label: "显示主窗口",
+      click: () => {
+        showMainWindow();
+      },
+    },
+    {
       label: "设置",
       click: () => {
+        console.log("==>TRAY 打开设置窗口<==");
         openSetWindow();
       },
     },
     {
       label: "日志",
       click: () => {
-        shell.openPath(app.getPath("logs"));
+        console.log("==>TRAY 查看软件日志<==");
+        shell.openPath(logPath);
       },
     },
     {
       label: "打印记录",
       click: () => {
+        console.log("==>TRAY 打开打印记录窗口<==");
         if (!PRINT_LOG_WINDOW) {
           printLogSetup();
         } else {
@@ -341,8 +395,16 @@ function initTray() {
       },
     },
     {
+      label: "关于",
+      click: () => {
+        console.log("==>TRAY 打开关于弹框<==");
+        showAboutDialog();
+      },
+    },
+    {
       label: "退出",
       click: () => {
+        console.log("==>TRAY 退出应用<==");
         helper.appQuit();
       },
     },
@@ -352,20 +414,8 @@ function initTray() {
 
   // 监听点击事件
   APP_TRAY.on("click", function() {
-    if (MAIN_WINDOW.isMinimized()) {
-      // 将窗口从最小化状态恢复到以前的状态
-      MAIN_WINDOW.restore();
-      MAIN_WINDOW.setSkipTaskbar(false);
-    }
-    if (!MAIN_WINDOW.isVisible()) {
-      // 主窗口关闭不会被销毁，只是隐藏，重新显示即可
-      MAIN_WINDOW.show();
-      MAIN_WINDOW.setSkipTaskbar(false);
-    }
-    if (!MAIN_WINDOW.isFocused()) {
-      // 主窗口未聚焦，使其聚焦
-      MAIN_WINDOW.focus();
-    }
+    console.log("==>TRAY 点击托盘图标<==");
+    showMainWindow();
   });
   return APP_TRAY;
 }

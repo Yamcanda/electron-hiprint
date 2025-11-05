@@ -1,13 +1,15 @@
 {
   "name": "electron-hiprint",
-  "version": "1.0.12-beta3",
+  "version": "1.0.14-beta5",
   "description": "vue-plugin-hiprint client",
   "main": "main.js",
   "author": "CcSimple<840054486@qq.com>",
   "license": "MIT",
   "homepage": "https://gitee.com/CcSimple",
   "scripts": {
-    "start": "node start.js",
+    "start": "node ./build/write-build-info.js && node start.js",
+    "postinstall": "npm run fix-sqlite3 && node ./build/write-build-info.js",
+    "fix-sqlite3": "node ./build/fixSqlite3bug.js",
     "build-w": "electron-builder -w nsis:ia32 && node ./tools/rename --tag win_x32",
     "build-w-64": "electron-builder -w nsis:x64 && node ./tools/rename --tag win_x64",
     "build-m": "electron-builder -m --x64 && node ./tools/rename --tag mac_x64",
@@ -15,6 +17,7 @@
     "build-m-universal": "electron-builder -m --universal && node ./tools/rename --tag mac_universal",
     "build-l": "electron-builder -l tar.xz && node ./tools/rename --tag linux_64",
     "build-l-arm64": "electron-builder -l --arm64 && node ./tools/rename --tag linux_arm64",
+    "build-kylin": "electron-builder && node ./tools/rename --tag Kylin_64",
     "compress": "node ./tools/code_compress --compress",
     "restore": "node ./tools/code_compress --restore",
     "build-all": "npm run build-w && npm run build-w-64 && npm run build-m && npm run build-m-arm64 && npm run build-m-universal && npm run build-l && npm run build-l-arm64",
@@ -63,6 +66,7 @@
     "win": {
       "icon": "./build/icons/256x256.png",
       "artifactName": "${productName}-${version}.${ext}",
+      "requestedExecutionLevel": "highestAvailable",
       "target": [
         {
           "target": "nsis"
@@ -73,7 +77,8 @@
       "icon": "./build/icons/256x256.png",
       "artifactName": "${productName}-${version}.${ext}",
       "target": [
-        "tar.xz"
+        "tar.xz",
+        "deb"
       ]
     },
     "protocols": [
@@ -83,21 +88,26 @@
           "hiprint"
         ]
       }
-    ]
+    ],
+    "publish": null
   },
   "dependencies": {
     "address": "^1.2.0",
+    "bwip-js": "^4.5.1",
     "concurrent-tasks": "^1.0.7",
     "dayjs": "^1.11.10",
+    "electron-log": "^5.4.2",
     "electron-store": "^8.1.0",
     "ipp": "^2.0.1",
     "jimp": "^1.6.0",
     "jquery": "^3.6.0",
+    "jsbarcode": "^3.11.6",
     "node-machine-id": "^1.1.12",
+    "nzh": "^1.0.14",
     "pdf-to-printer": "^5.6.0",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
-    "sqlite3": "5.1.6",
+    "sqlite3": "5.1.7",
     "unix-print": "^1.3.2",
     "uuid": "^11.0.3",
     "win32-pdf-printer": "^5.0.0"

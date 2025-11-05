@@ -1,0 +1,163 @@
+name: Release Build
+
+on:
+  push:
+    # 仅匹配 1.2.3 或 1.2.3-beta1 这样的 tag，例如 1.0.0、2.3.4-beta2
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-beta[0-9]+"
+
+permissions: write-all
+
+concurrency:
+  group: "${{ github.workflow }} - ${{ github.head_ref || github.ref }}"
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+jobs:
+  check-version:
+    name: 校验版本号
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 校验 package.json version 与 tag 一致
+        run: |
+          TAG_NAME="${GITHUB_REF##refs/tags/}"
+          PKG_VERSION=$(jq -r .version package.json)
+          if [[ "$PKG_VERSION" != "$TAG_NAME" ]]; then
+            echo "❌ package.json 里的 version ($PKG_VERSION) 和 tag ($TAG_NAME) 不一致，终止执行。"
+            exit 1
+          fi
+          echo "✅ package.json 里的 version 和 tag ($TAG_NAME) 一致，继续执行。"
+
+  build:
+    name: 打包
+    needs: check-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: build-w-64
+            name-suffix: win_x64
+          - os: windows-latest
+            script: build-w
+            name-suffix: win_ia32
+          - os: macos-latest
+            script: build-m-arm64
+            name-suffix: mac_arm64
+          - os: macos-latest
+            script: build-m
+            name-suffix: mac_x64
+          - os: macos-latest
+            script: build-m-universal
+            name-suffix: mac_universal
+          - os: ubuntu-latest
+            script: build-l
+            name-suffix: linux_x64
+          - os: ubuntu-latest
+            script: build-l-arm64
+            name-suffix: linux_arm64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: 安装依赖
+        run: npm install
+
+      - name: 打包 ${{ matrix.name-suffix }}
+        run: npm run ${{ matrix.script }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name-suffix }}
+          path: |
+            out/*.exe
+            out/*.dmg
+            out/*.tar.xz
+            out/*.deb
+          retention-days: 7
+
+  release:
+    name: 自动发布 Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 获取当前日期
+        run: echo "RELEASE_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      - name: 下载 win64 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: win_x64
+          path: artifacts/win
+
+      - name: 下载 win32 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: win_ia32
+          path: artifacts/win
+
+      - name: 下载 mac ARM64 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: mac_arm64
+          path: artifacts/mac
+
+      - name: 下载 mac x64 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: mac_x64
+          path: artifacts/mac
+
+      - name: 下载 mac Universal 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: mac_universal
+          path: artifacts/mac
+
+      - name: 下载 linux x64 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: linux_x64
+          path: artifacts/linux
+
+      - name: 下载 linux ARM64 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: linux_arm64
+          path: artifacts/linux
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }} (${{ env.RELEASE_DATE }})
+          draft: true
+          generate_release_notes: true
+          body: |
+            Github Actions 自动发布的 Release
+
+            > [!IMPORTANT]
+            > macOS 提示应用程序已经损坏，解决方案
+            >
+            > [文件提示损坏解决办法 macwk.cn](https://macwk.cn/1144.html)
+            > `sudo xattr -r -d com.apple.quarantine /应用程序路径/hiprint.app`
+          files: |
+            artifacts/win/**
+            artifacts/mac/**
+            artifacts/linux/**
+          prerelease: ${{ contains(github.ref_name, 'beta') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

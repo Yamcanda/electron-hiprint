@@ -18,7 +18,6 @@ const path = require("path");
 const https = require("node:https");
 const fs = require("node:fs");
 const { store } = require("../tools/utils");
-const log = require("../tools/log");
 
 /**
  * @description: 创建设置窗口
@@ -92,6 +91,7 @@ function loadingView(windowOptions) {
 
   // 设置窗口 dom 加载完毕，移除 loadingBrowserView
   SET_WINDOW.webContents.on("dom-ready", async (event) => {
+    loadingBrowserView.webContents.destroy();
     SET_WINDOW.removeBrowserView(loadingBrowserView);
   });
 }
@@ -103,17 +103,47 @@ function loadingView(windowOptions) {
  * @return {void}
  */
 function setConfig(event, data) {
-  log("==> 设置窗口：保存配置 <==");
+  console.log("==> 设置窗口：保存配置 <==");
   // 保存配置前，弹出 dialog 确认
   dialog
     .showMessageBox(SET_WINDOW, {
       type: "question",
       title: "提示",
-      message: "修改设置后需要立即重启，继续操作？",
+      message:
+        "保存设置需要重启软件，如有正在执行中的打印任务可能会被中断，是否确定要保存并重启？",
       buttons: ["确定", "取消"],
     })
     .then((res) => {
       if (res.response === 0) {
+        try {
+          let pdfPath = path.join(data.pdfPath, "url_pdf");
+          fs.mkdirSync(pdfPath, { recursive: true });
+          pdfPath = path.join(data.pdfPath, "blob_pdf");
+          fs.mkdirSync(pdfPath, { recursive: true });
+          pdfPath = path.join(data.pdfPath, "hiprint");
+          fs.mkdirSync(pdfPath, { recursive: true });
+        } catch {
+          dialog.showMessageBox(SET_WINDOW, {
+            type: "error",
+            title: "提示",
+            message: "pdf 保存路径无法写入数据，请重新设置！",
+            buttons: ["确定"],
+            noLink: true,
+          });
+          return;
+        }
+        try {
+          fs.accessSync(data.logPath, fs.constants.W_OK);
+        } catch (err) {
+          dialog.showMessageBox(SET_WINDOW, {
+            type: "error",
+            title: "提示",
+            message: "日志保存路径无法写入数据，请重新设置！",
+            buttons: ["确定"],
+            noLink: true,
+          });
+          return;
+        }
         store.set(data);
         setTimeout(() => {
           app.relaunch();
@@ -139,7 +169,11 @@ function downloadPlugin(event, data) {
           (res) => {
             let filePath = "";
             if (app.isPackaged) {
-              filePath = path.join(app.getAppPath(), "../", `plugin/${data}_${url}`);
+              filePath = path.join(
+                app.getAppPath(),
+                "../",
+                `plugin/${data}_${url}`,
+              );
             } else {
               filePath = path.join(app.getAppPath(), `plugin/${data}_${url}`);
             }
@@ -162,6 +196,7 @@ function downloadPlugin(event, data) {
         title: "提示",
         message: "插件下载成功！",
         buttons: ["确定"],
+        noLink: true,
       });
       const downloadedVersions = getDownloadedVersions();
       SET_WINDOW.webContents.send("downloadedVersions", downloadedVersions);
@@ -172,6 +207,7 @@ function downloadPlugin(event, data) {
         title: "提示",
         message: "插件下载失败！",
         buttons: ["确定"],
+        noLink: true,
       });
     });
 }
@@ -193,7 +229,7 @@ function setContentSize(event, data) {
  * @return {void}
  */
 function showMessageBox(event, data) {
-  dialog.showMessageBox(SET_WINDOW, data);
+  dialog.showMessageBox(SET_WINDOW, { noLink: true, ...data });
 }
 
 /**
@@ -204,6 +240,20 @@ function showMessageBox(event, data) {
  */
 function showOpenDialog(event, data) {
   dialog.showOpenDialog(SET_WINDOW, data).then((result) => {
+    if (!result.canceled) {
+      try {
+        fs.accessSync(result.filePaths[0], fs.constants.W_OK);
+      } catch {
+        dialog.showMessageBox(SET_WINDOW, {
+          type: "error",
+          title: "提示",
+          message: "路径无法写入，请重新选择！",
+          buttons: ["确定"],
+          noLink: true,
+        });
+        result.canceled = true;
+      }
+    }
     event.reply("openDialog", result);
   });
 }
@@ -244,6 +294,7 @@ function testTransit(event, data) {
       title: "提示",
       message: `${err.message}，请检查设置！`,
       buttons: ["确定"],
+      noLink: true,
     });
     socket.close();
   });
@@ -255,6 +306,7 @@ function testTransit(event, data) {
       title: "提示",
       message: "连接成功！",
       buttons: ["确定"],
+      noLink: true,
     });
   });
 
@@ -340,12 +392,12 @@ function getDownloadedVersions() {
 async function getPrintersList(event) {
   try {
     const printers = await SET_WINDOW.webContents.getPrintersAsync();
-    let list = printers.map(item => {
+    let list = printers.map((item) => {
       return { value: item.name };
-    })
+    });
     SET_WINDOW.webContents.send("getPrintersList", list);
   } catch (error) {
-    console.error('获取打印机列表失败:', error);
+    console.error("获取打印机列表失败:", error);
     SET_WINDOW.webContents.send("getPrintersList", []);
   }
 }

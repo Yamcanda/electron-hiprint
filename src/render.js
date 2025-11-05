@@ -6,7 +6,8 @@ const path = require("path");
 const { Jimp } = require("jimp");
 const dayjs = require("dayjs");
 
-const log = require("../tools/log");
+const { store } = require("../tools/utils");
+const db = require("../tools/database");
 
 // 这是 1920 * 1080 屏幕常规工作区域尺寸
 let windowWorkArea = {
@@ -74,6 +75,9 @@ async function createRenderWindow() {
       contextIsolation: false, // 设置此项为false后，才可在渲染进程中使用electron api
       nodeIntegration: true,
     },
+    // 为窗口设置背景色可能优化字体模糊问题
+    // https://www.electronjs.org/zh/docs/latest/faq#文字看起来很模糊这是什么原因造成的怎么解决这个问题呢
+    backgroundColor: "#fff",
   };
 
   // 创建打印窗口
@@ -91,30 +95,20 @@ async function createRenderWindow() {
     });
 
     windowWorkArea = display.workAreaSize;
-  });
 
-  // 未打包时打开开发者工具
-  if (!app.isPackaged) {
-    // !打开开发者模式时，窗口尺寸变化将在右上角显示窗口尺寸，对 capturePage 功能会造成一定的误解
-    RENDER_WINDOW.webContents.openDevTools();
-  }
+    // 未打包时打开开发者工具
+    if (!app.isPackaged) {
+      // !打开开发者模式时，窗口尺寸变化将在右上角显示窗口尺寸，对 capturePage 功能会造成一定的误解
+      RENDER_WINDOW.webContents.openDevTools();
+    }
+  });
 
   // 绑定窗口事件
   initEvent();
 
+  RENDER_WINDOW.on("closed", removeEvent);
+
   return RENDER_WINDOW;
-}
-
-/**
- * @description: 初始化事件
- */
-function initEvent() {
-  ipcMain.on("capturePage", capturePage);
-  ipcMain.on("printToPDF", printToPDF);
-
-  ipcMain.on("print", printFun);
-
-  ipcMain.on("showMessageBox", showMessageBox);
 }
 
 /**
@@ -218,7 +212,7 @@ async function capturePage(event, data) {
             () => {},
           );
         }
-        log(
+        console.log(
           `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模版 【${
             data.templateId
           }】 获取 png 成功`,
@@ -231,7 +225,7 @@ async function capturePage(event, data) {
         });
       });
   } catch (error) {
-    log(
+    console.log(
       `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模版 【${
         data.templateId
       }】 获取 png 失败`,
@@ -292,7 +286,7 @@ function printToPDF(event, data) {
       });
     })
     .catch((error) => {
-      log(
+      console.log(
         `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模版 【${
           data.templateId
         }】 获取 pdf 失败`,
@@ -325,11 +319,18 @@ async function printFun(event, data) {
   }
   const printers = await RENDER_WINDOW.webContents.getPrintersAsync();
   let havePrinter = false;
-  let defaultPrinter = "";
+  let defaultPrinter = data.printer || store.get("defaultPrinter", "");
   let printerError = false;
   printers.forEach((element) => {
+    // 获取默认打印机
+    if (
+      element.isDefault &&
+      (defaultPrinter == "" || defaultPrinter == void 0)
+    ) {
+      defaultPrinter = element.name;
+    }
     // 判断打印机是否存在
-    if (element.name === data.printer) {
+    if (element.name === defaultPrinter) {
       // todo: 打印机状态对照表
       // win32: https://learn.microsoft.com/en-us/windows/win32/printdocs/printer-info-2
       // cups: https://www.cups.org/doc/cupspm.html#ipp_status_e
@@ -344,13 +345,9 @@ async function printFun(event, data) {
       }
       havePrinter = true;
     }
-    // 获取默认打印机
-    if (element.isDefault) {
-      defaultPrinter = element.name;
-    }
   });
   if (printerError) {
-    log(
+    console.log(
       `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${
         data.templateId
       }】 打印失败，打印机异常，打印机：${data.printer}`,
@@ -366,7 +363,30 @@ async function printFun(event, data) {
     delete PRINT_RUNNER_DONE[data.taskId];
     return;
   }
-  let deviceName = havePrinter ? data.printer : defaultPrinter;
+  let deviceName = defaultPrinter;
+
+  const logPrintResult = (status, errorMessage = "") => {
+    db.run(
+      `INSERT INTO print_logs (socketId, clientType, printer, templateId, data, pageNum, status, rePrintAble, errorMessage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        socket?.id,
+        data.clientType,
+        deviceName,
+        data.templateId,
+        JSON.stringify(data),
+        data.pageNum,
+        status,
+        data.rePrintAble ?? 1,
+        errorMessage,
+      ],
+      (err) => {
+        if (err) {
+          console.error("Failed to log print result", err);
+        }
+      },
+    );
+  };
+
   // 打印 详见https://www.electronjs.org/zh/docs/latest/api/web-contents
   RENDER_WINDOW.webContents.print(
     {
@@ -384,7 +404,7 @@ async function printFun(event, data) {
       copies: data.copies ?? 1, // 打印份数
       pageRanges: data.pageRanges ?? {}, // 打印页数
       duplexMode: data.duplexMode, // 打印模式 simplex,shortEdge,longEdge
-      dpi: data.dpi, // 打印机DPI
+      dpi: data.dpi ?? 300, // 打印机DPI
       header: data.header, // 打印头
       footer: data.footer, // 打印尾
       pageSize: data.pageSize, // 打印纸张
@@ -392,7 +412,7 @@ async function printFun(event, data) {
     (success, failureReason) => {
       if (socket) {
         if (success) {
-          log(
+          console.log(
             `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${
               data.templateId
             }】 打印成功，打印类型 JSON，打印机：${deviceName}，页数：${
@@ -404,13 +424,15 @@ async function printFun(event, data) {
             templateId: data.templateId,
             replyId: data.replyId,
           };
+          logPrintResult("success");
           socket.emit("render-print-success", result);
         } else {
-          log(
+          console.log(
             `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${
               data.templateId
             }】 打印失败，打印类型 JSON，打印机：${deviceName}，原因：${failureReason}`,
           );
+          logPrintResult("failed", failureReason);
           socket.emit("render-print-error", {
             msg: failureReason,
             templateId: data.templateId,
@@ -433,7 +455,29 @@ async function printFun(event, data) {
  * @return {void}
  */
 function showMessageBox(event, data) {
-  dialog.showMessageBox(SET_WINDOW, data);
+  dialog.showMessageBox(SET_WINDOW, { noLink: true, ...data });
+}
+
+/**
+ * @description: 初始化事件
+ */
+function initEvent() {
+  ipcMain.on("capturePage", capturePage);
+  ipcMain.on("printToPDF", printToPDF);
+  ipcMain.on("print", printFun);
+  ipcMain.on("showMessageBox", showMessageBox);
+}
+
+/**
+ * @description: 移除事件
+ * @return {void}
+ */
+function removeEvent() {
+  ipcMain.removeListener("capturePage", capturePage);
+  ipcMain.removeListener("printToPDF", printToPDF);
+  ipcMain.removeListener("print", printFun);
+  ipcMain.removeListener("showMessageBox", showMessageBox);
+  RENDER_WINDOW = null;
 }
 
 module.exports = async () => {
