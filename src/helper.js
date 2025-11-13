@@ -1,5 +1,5 @@
 "use strict";
-const { app } = require("electron");
+const { app, globalShortcut } = require("electron");
 
 /**
  * 退出应用
@@ -8,6 +8,10 @@ const { app } = require("electron");
  */
 exports.appQuit = function() {
   console.log("==> Electron-hiprint 关闭 <==");
+  // 清理全局快捷键
+  if (globalShortcut) {
+    globalShortcut.unregisterAll();
+  }
   SET_WINDOW && SET_WINDOW.destroy();
   PRINT_WINDOW && PRINT_WINDOW.destroy();
   MAIN_WINDOW && MAIN_WINDOW.destroy();

@@ -71,7 +71,7 @@
       >
         <el-row :gutter="12">
           <template v-for="item in formOptions.items">
-            <el-col :span="item.span || formOptions.span">
+            <el-col v-if="item.prop !== 'autoOpenUrl'" :span="item.span || formOptions.span">
               <el-form-item
                 v-if="item.display !== false"
                 :key="item.prop"
@@ -122,6 +122,31 @@
               </el-form-item>
             </el-col>
           </template>
+          <el-col v-if="setTab === 'advancedSet'" :span="24">
+            <el-form-item>
+              <div style="margin-bottom: 8px;">
+                <span style="font-weight: 500;">自助报告打印</span>
+              </div>
+              <el-row :gutter="12">
+                <el-col :span="4">
+                  <el-switch
+                    v-model="formData.autoOpenUrl"
+                    @change="(val) => {
+                      if (val && !formData.autoOpenUrlValue) {
+                        formData.autoOpenUrlValue = DEFAULT_SELF_SERVICE_PRINT_URL;
+                      }
+                    }"
+                  ></el-switch>
+                </el-col>
+                <el-col :span="20" v-if="formData.autoOpenUrl">
+                  <el-input
+                    v-model="formData.autoOpenUrlValue"
+                    placeholder="请输入完整的地址"
+                  ></el-input>
+                </el-col>
+              </el-row>
+            </el-form-item>
+          </el-col>
           <el-col :span="24">
             <el-form-item>
               <el-row :gutter="12">
@@ -150,6 +175,8 @@
       const { ipcRenderer } = require("electron");
       const Store = require("electron-store");
       const store = new Store();
+
+      const DEFAULT_SELF_SERVICE_PRINT_URL = "http://192.168.1.160/selfServicePrint?hospCode=H01";
 
       let ipc = ipcRenderer;
 
@@ -190,6 +217,8 @@
               logPath: "",
               pdfPath: "",
               defaultPrinter: "",
+              autoOpenUrl: false,
+              autoOpenUrlValue: DEFAULT_SELF_SERVICE_PRINT_URL,
             },
             // 预制的版本，解决部分内网无法获取新版本的问题
             versions: [
@@ -551,6 +580,10 @@
           this.onEvents();
           // 获取配置
           this.formData = store.store;
+          // 如果开启了自动打开URL但没有设置URL值，则设置默认值
+          if (this.formData.autoOpenUrl && !this.formData.autoOpenUrlValue) {
+            this.formData.autoOpenUrlValue = DEFAULT_SELF_SERVICE_PRINT_URL;
+          }
           // this.getVersions();
           this.getPrintersList();
         },

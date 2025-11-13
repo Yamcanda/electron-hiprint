@@ -13,7 +13,34 @@ if (fs.existsSync(buildInfoPath)) {
   buildInfo = require(buildInfoPath);
 }
 
+/**
+ * @description: 安全调用 getPaperSizeInfoAll, 添加错误处理和路径修复
+ * 由于 win32-pdf-printer 包在处理包含空格的路径时存在问题，添加包装函数
+ */
+function safeGetPaperSizeInfoAll() {
+  try {
+    return getPaperSizeInfoAll();
+  } catch (error) {
+    console.error("safeGetPaperSizeInfoAll 调用失败:", error.message);
+    return [];
+  }
+}
+
+/**
+ * @description: 安全调用 getPaperSizeInfo, 添加错误处理
+ */
+function safeGetPaperSizeInfo(printer) {
+  try {
+    return getPaperSizeInfo({ printer });
+  } catch (error) {
+    console.error("safeGetPaperSizeInfo 调用失败:", error.message);
+    return [];
+  }
+}
+
 Store.initRenderer();
+
+const DEFAULT_SELF_SERVICE_PRINT_URL = "http://192.168.1.160/selfServicePrint?hospCode=H01";
 
 const schema = {
   mainTitle: {
@@ -85,6 +112,14 @@ const schema = {
   rePrint: {
     type: "boolean",
     default: true,
+  },
+  autoOpenUrl: {
+    type: "boolean",
+    default: false,
+  },
+  autoOpenUrlValue: {
+    type: "string",
+    default: DEFAULT_SELF_SERVICE_PRINT_URL,
   },
 };
 
@@ -365,9 +400,15 @@ function initServeEvent(server) {
     socket.on("getPaperSizeInfo", (printer) => {
       console.log(`插件端 ${socket.id}: getPaperSizeInfo`);
       if (process.platform === "win32") {
-        let fun = printer ? getPaperSizeInfo : getPaperSizeInfoAll;
-        let paper = fun();
-        paper && socket.emit("paperSizeInfo", paper);
+        try {
+          let paper = printer ? safeGetPaperSizeInfo(printer) : safeGetPaperSizeInfoAll();
+          paper && socket.emit("paperSizeInfo", paper);
+        } catch (error) {
+          console.error("获取打印机纸张信息失败:", error.message);
+          socket.emit("error", {
+            msg: "获取打印机纸张信息失败",
+          });
+        }
       }
     });
 
@@ -744,12 +785,20 @@ function initClientEvent() {
 
 function getCurrentPrintStatusByName(printerName) {
   if (process.platform === "win32") {
-    const { StatusMsg } = getPaperSizeInfoAll().find(
-      (item) => item.PrinterName === printerName,
-    ) || { StatusMsg: "未找到打印机" };
-    return {
-      StatusMsg,
-    };
+    try {
+      const paperList = safeGetPaperSizeInfoAll();
+      const printerInfo = paperList.find(
+        (item) => item.PrinterName === printerName,
+      );
+      return {
+        StatusMsg: printerInfo?.StatusMsg || "未找到打印机",
+      };
+    } catch (error) {
+      console.error("获取打印机状态失败:", error.message);
+      return {
+        StatusMsg: "获取打印机状态失败",
+      };
+    }
   }
   return { StatusMsg: "非Windows系统, 暂不支持" };
 }
@@ -808,4 +857,5 @@ module.exports = {
   getCurrentPrintStatusByName,
   getMachineId,
   showAboutDialog,
+  DEFAULT_SELF_SERVICE_PRINT_URL,
 };

@@ -13,6 +13,7 @@ const {
   Tray,
   Menu,
   shell,
+  globalShortcut,
 } = require("electron");
 const electronLog = require("electron-log");
 const path = require("path");
@@ -57,6 +58,30 @@ if (store.get("disabledGpu")) {
   app.commandLine.appendSwitch("disable-gpu");
 }
 
+// 添加 IPC 监听器，处理页面内发送的退出全屏请求
+ipcMain.on("exit-fullscreen", () => {
+  try {
+    if (global.AUTO_OPEN_URL_SHOWN && MAIN_WINDOW && MAIN_WINDOW.isFullScreen()) {
+      console.log("==> IPC 请求退出全屏 <==");
+      MAIN_WINDOW.setFullScreen(false);
+    }
+  } catch (err) {
+    console.error("IPC 退出全屏失败:", err);
+  }
+});
+
+// 添加 IPC 监听器，处理页面内发送的进入全屏请求
+ipcMain.on("enter-fullscreen", () => {
+  try {
+    if (global.AUTO_OPEN_URL_SHOWN && MAIN_WINDOW && !MAIN_WINDOW.isFullScreen()) {
+      console.log("==> IPC 请求进入全屏 <==");
+      MAIN_WINDOW.setFullScreen(true);
+    }
+  } catch (err) {
+    console.error("IPC 进入全屏失败:", err);
+  }
+});
+
 // 主进程
 global.MAIN_WINDOW = null;
 // 托盘
@@ -73,6 +98,10 @@ global.PRINT_LOG_WINDOW = null;
 global.SOCKET_SERVER = null;
 // socket.io-client 客户端
 global.SOCKET_CLIENT = null;
+// 加载页面 BrowserView
+global.LOADING_BROWSER_VIEW = null;
+// 是否已通过autoOpenUrl显示窗口
+global.AUTO_OPEN_URL_SHOWN = false;
 // 打印队列，解决打印并发崩溃问题
 global.PRINT_RUNNER = new TaskRunner({ concurrency: 1 });
 // 打印队列 done 集合
@@ -187,7 +216,7 @@ async function createWindow() {
     title: store.get("mainTitle") || "Electron-hiprint",
     useContentSize: true, // 窗口大小不包含边框
     center: true, // 居中
-    resizable: false, // 禁止窗口缩放
+    resizable: true, // 允许窗口缩放和全屏
     show: false, // 初始隐藏
     webPreferences: {
       // 设置此项为false后，才可在渲染进程中使用 electron api
@@ -210,14 +239,23 @@ async function createWindow() {
   MAIN_WINDOW = new BrowserWindow(windowOptions);
 
   // 添加加载页面 解决白屏的问题
-  loadingView(windowOptions);
+  global.LOADING_BROWSER_VIEW = loadingView(windowOptions);
 
   // 初始化系统设置
   systemSetup();
 
-  // 加载主页面
-  const indexHtml = path.join("file://", app.getAppPath(), "assets/index.html");
-  MAIN_WINDOW.webContents.loadURL(indexHtml);
+  // 检查是否需要启动时打开自定义页面
+  if (store.get("autoOpenUrl") && store.get("autoOpenUrlValue")) {
+    const url = store.get("autoOpenUrlValue");
+    // 加载URL
+    MAIN_WINDOW.webContents.loadURL(url);
+    // 设置一个标志，表示已经手动显示了窗口
+    global.AUTO_OPEN_URL_SHOWN = true;
+  } else {
+    // 加载主页面
+    const indexHtml = path.join("file://", app.getAppPath(), "assets/index.html");
+    MAIN_WINDOW.webContents.loadURL(indexHtml);
+  }
 
   // 退出
   MAIN_WINDOW.on("closed", () => {
@@ -242,11 +280,155 @@ async function createWindow() {
     }
   });
 
+  // 主窗口页面完全加载完成
+  MAIN_WINDOW.webContents.on("did-finish-load", async () => {
+    try {
+      if (global.AUTO_OPEN_URL_SHOWN) {
+        // 如果是通过autoOpenUrl显示的窗口，在页面完全加载后确保全屏
+        MAIN_WINDOW.setFullScreen(true);
+      }
+      console.log('页面加载完成，注入键盘监听器');
+      // 延迟注入键盘监听器
+      setTimeout(() => injectKeyboardListener(), 100);
+    } catch (err) {
+      console.error("全屏失败:", err);
+    }
+  });
+
+  // 主窗口导航事件
+  MAIN_WINDOW.webContents.on("will-navigate", (event, navigationUrl) => {
+    try {
+      if (global.AUTO_OPEN_URL_SHOWN) {
+        // 在自助报告打印模式下，保持全屏状态
+        MAIN_WINDOW.setFullScreen(true);
+      }
+    } catch (err) {
+      console.error("导航时全屏失败:", err);
+    }
+  });
+
+  // 定义键盘监听器注入函数
+  const injectKeyboardListener = () => {
+    MAIN_WINDOW.webContents.executeJavaScript(`
+      (function() {
+        console.log('添加页面键盘监听器');
+
+        // 清除旧的监听器标记
+        window.__HIPRINT_KEYBOARD_LISTENER_ADDED__ = false;
+
+        // 添加页面内IPC监听器，响应主进程的IPC请求
+        if (window.require) {
+          try {
+            const { ipcRenderer } = window.require('electron');
+            ipcRenderer.on('fullscreen-status-changed', (event, isFullScreen) => {
+              console.log('全屏状态改变:', isFullScreen);
+            });
+          } catch (err) {
+            console.error('添加IPC监听器失败:', err);
+          }
+        }
+
+        // 添加键盘事件监听器
+        document.addEventListener('keydown', function(e) {
+          // ESC 键退出全屏
+          if (e.key === 'Escape') {
+            console.log('ESC 键退出全屏');
+            if (window.require) {
+              try {
+                window.require('electron').ipcRenderer.send('exit-fullscreen');
+                e.preventDefault();
+              } catch (err) {
+                console.error('IPC 发送失败:', err);
+              }
+            }
+          }
+          // F11 键切换全屏状态
+          else if (e.key === 'F11') {
+            console.log('F11 键切换全屏状态');
+            if (window.require) {
+              try {
+                const ipcRenderer = window.require('electron').ipcRenderer;
+                const currentWindow = window.require('electron').remote.getCurrentWindow();
+                const isFullScreen = currentWindow.isFullScreen();
+                console.log('当前全屏状态:', isFullScreen);
+
+                if (isFullScreen) {
+                  console.log('发送退出全屏请求');
+                  ipcRenderer.send('exit-fullscreen');
+                } else {
+                  console.log('发送进入全屏请求');
+                  ipcRenderer.send('enter-fullscreen');
+                }
+                e.preventDefault();
+              } catch (err) {
+                console.error('IPC 发送失败:', err);
+              }
+            }
+          }
+        });
+
+        // 标记监听器已添加
+        window.__HIPRINT_KEYBOARD_LISTENER_ADDED__ = true;
+        console.log('页面内键盘监听器添加完成');
+      })();
+    `).catch(err => console.error('注入键盘监听器失败:', err));
+  };
+
+  // 页面导航完成后重新注入键盘监听器
+  MAIN_WINDOW.webContents.on("did-navigate", () => {
+    console.log('页面导航完成，重新注入键盘监听器');
+    // 延迟注入，确保页面DOM准备好
+    setTimeout(() => injectKeyboardListener(), 500);
+  });
+
+  // 页面内容变化时也重新注入监听器
+  MAIN_WINDOW.webContents.on("dom-content-loaded", () => {
+    console.log('DOM内容加载完成，注入键盘监听器');
+    setTimeout(() => injectKeyboardListener(), 300);
+  });
+
+  // 页面内容更新时也重新注入监听器（SPA应用）
+  MAIN_WINDOW.webContents.on("did-start-loading", () => {
+    console.log('页面开始重新加载，清理监听器标记');
+    // 清理监听器标记，让重新加载后可以重新注入
+    MAIN_WINDOW.webContents.executeJavaScript(`
+      window.__HIPRINT_KEYBOARD_LISTENER_ADDED__ = false;
+    `).catch(() => {});
+  });
+
   // 主窗口 Dom 加载完毕
   MAIN_WINDOW.webContents.on("dom-ready", async () => {
     try {
-      if (!store.get("openAsHidden")) {
+      if (!global.AUTO_OPEN_URL_SHOWN) {
+        // 只有当不是通过autoOpenUrl显示窗口时才根据openAsHidden控制
+        if (!store.get("openAsHidden")) {
+          MAIN_WINDOW.show();
+        }
+        // 移除 loading view
+        if (global.LOADING_BROWSER_VIEW) {
+          global.LOADING_BROWSER_VIEW.webContents.destroy();
+          MAIN_WINDOW.removeBrowserView(global.LOADING_BROWSER_VIEW);
+          global.LOADING_BROWSER_VIEW = null;
+        }
+        // 在自助报告打印模式下，即使没有全屏也要注入键盘监听器
+        if (global.AUTO_OPEN_URL_SHOWN) {
+          setTimeout(() => injectKeyboardListener(), 200);
+        }
+      } else {
+        // 如果是通过autoOpenUrl显示的窗口，立即移除loading view并全屏
+        if (global.LOADING_BROWSER_VIEW) {
+          global.LOADING_BROWSER_VIEW.webContents.destroy();
+          MAIN_WINDOW.removeBrowserView(global.LOADING_BROWSER_VIEW);
+          global.LOADING_BROWSER_VIEW = null;
+        }
+        // 立即显示并全屏
         MAIN_WINDOW.show();
+        // 等待一帧后再全屏，确保窗口已经完全显示
+        setTimeout(() => {
+          MAIN_WINDOW.setFullScreen(true);
+          // 全屏后注入键盘监听器
+          setTimeout(() => injectKeyboardListener(), 100);
+        }, 50);
       }
       // 未打包时打开开发者工具
       if (!app.isPackaged) {
@@ -282,6 +464,37 @@ async function createWindow() {
 
   // 初始化托盘
   initTray();
+
+  // 添加全局键盘事件监听器，作为保底方案
+  console.log("==> 注册全局快捷键（保底方案） <==");
+  globalShortcut.register("Escape", () => {
+    try {
+      if (MAIN_WINDOW && MAIN_WINDOW.isFullScreen()) {
+        console.log("==>全局 ESC 键退出全屏 <==");
+        MAIN_WINDOW.setFullScreen(false);
+      }
+    } catch (err) {
+      console.error("全局 ESC 键退出全屏失败:", err);
+    }
+  });
+
+  // F11 快捷键作为保底方案
+  globalShortcut.register("F11", () => {
+    try {
+      if (MAIN_WINDOW) {
+        console.log("==>全局 F11 键切换全屏 <==");
+        const isFullScreen = MAIN_WINDOW.isFullScreen();
+        if (isFullScreen) {
+          MAIN_WINDOW.setFullScreen(false);
+        } else {
+          MAIN_WINDOW.setFullScreen(true);
+        }
+      }
+    } catch (err) {
+      console.error("全局 F11 键切换全屏失败:", err);
+    }
+  });
+
   // 打印窗口初始化
   await printSetup();
   // 渲染窗口初始化
@@ -293,7 +506,7 @@ async function createWindow() {
 /**
  * @description: 加载等待页面，解决主窗口白屏问题
  * @param {Object} windowOptions 主窗口配置
- * @return {Void}
+ * @return {BrowserView}
  */
 function loadingView(windowOptions) {
   const loadingBrowserView = new BrowserView();
@@ -312,11 +525,7 @@ function loadingView(windowOptions) {
   );
   loadingBrowserView.webContents.loadURL(loadingHtml);
 
-  // 主窗口 dom 加载完毕，移除 loadingBrowserView
-  MAIN_WINDOW.webContents.on("dom-ready", async (event) => {
-    loadingBrowserView.webContents.destroy();
-    MAIN_WINDOW.removeBrowserView(loadingBrowserView);
-  });
+  return loadingBrowserView;
 }
 
 /**
@@ -362,53 +571,53 @@ function initTray() {
 
   // 托盘菜单
   const trayMenuTemplate = [
-    {
-      // 神知道为什么 linux 上无法识别 tray click、double-click，只能添加一个菜单
-      label: "显示主窗口",
-      click: () => {
-        showMainWindow();
+      {
+        // 神知道为什么 linux 上无法识别 tray click、double-click，只能添加一个菜单
+        label: "显示主窗口",
+        click: () => {
+          showMainWindow();
+        },
       },
-    },
-    {
-      label: "设置",
-      click: () => {
-        console.log("==>TRAY 打开设置窗口<==");
-        openSetWindow();
+      {
+        label: "设置",
+        click: () => {
+          console.log("==>TRAY 打开设置窗口<==");
+          openSetWindow();
+        },
       },
-    },
-    {
-      label: "日志",
-      click: () => {
-        console.log("==>TRAY 查看软件日志<==");
-        shell.openPath(logPath);
+      {
+        label: "日志",
+        click: () => {
+          console.log("==>TRAY 查看软件日志<==");
+          shell.openPath(logPath);
+        },
       },
-    },
-    {
-      label: "打印记录",
-      click: () => {
-        console.log("==>TRAY 打开打印记录窗口<==");
-        if (!PRINT_LOG_WINDOW) {
-          printLogSetup();
-        } else {
-          PRINT_LOG_WINDOW.show();
-        }
+      {
+        label: "打印记录",
+        click: () => {
+          console.log("==>TRAY 打开打印记录窗口<==");
+          if (!PRINT_LOG_WINDOW) {
+            printLogSetup();
+          } else {
+            PRINT_LOG_WINDOW.show();
+          }
+        },
       },
-    },
-    {
-      label: "关于",
-      click: () => {
-        console.log("==>TRAY 打开关于弹框<==");
-        showAboutDialog();
+      {
+        label: "关于",
+        click: () => {
+          console.log("==>TRAY 打开关于弹框<==");
+          showAboutDialog();
+        },
       },
-    },
-    {
-      label: "退出",
-      click: () => {
-        console.log("==>TRAY 退出应用<==");
-        helper.appQuit();
+      {
+        label: "退出",
+        click: () => {
+          console.log("==>TRAY 退出应用<==");
+          helper.appQuit();
+        },
       },
-    },
-  ];
+    ];
 
   APP_TRAY.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate));
 

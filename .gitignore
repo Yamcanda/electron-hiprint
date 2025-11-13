@@ -23,3 +23,7 @@ tools/database.sqlite
 
 .history
 .vscode
+
+*.lock
+notes.md
+build.bat
