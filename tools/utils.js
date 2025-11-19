@@ -121,6 +121,21 @@ const schema = {
     type: "string",
     default: DEFAULT_SELF_SERVICE_PRINT_URL,
   },
+  // 自助报告打印延迟时间（秒），0表示不延迟
+  autoOpenUrlDelay: {
+    type: "number",
+    default: 0,
+  },
+  // 重试间隔（秒）
+  autoOpenUrlRetryInterval: {
+    type: "number",
+    default: 10,
+  },
+  // 最大重试次数
+  autoOpenUrlMaxRetries: {
+    type: "number",
+    default: 6,
+  },
 };
 
 const store = new Store({ schema });
@@ -600,7 +615,7 @@ function initClientEvent() {
    * @description: 连接中转服务成功，绑定 socket 事件
    */
   client.on("connect", async () => {
-    console.log(`==> 中转服务 Connected Transit Server: ${client.id}`);
+    console.log(`【debug】==> 中转服务 Connected Transit Server: ${client.id}`);
     // 通知渲染进程已连接
     MAIN_WINDOW.webContents.send("clientConnection", true);
 

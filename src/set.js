@@ -323,7 +323,8 @@ function testTransit(event, data) {
     //   freemem: 94961664, // 可用内存
     // }
 
-    console.log(data);
+    const jsonData = JSON.stringify(data);
+    console.log(`中转服务 ==> 中转服务信息 ${jsonData}`);
     // 关闭测试连接
     socket.close();
   });

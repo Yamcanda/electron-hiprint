@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>打印服务</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    .countdown-container {
+      text-align: center;
+      padding: 40px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+    }
+    .countdown-title {
+      font-size: 24px;
+      margin-bottom: 20px;
+      opacity: 0.9;
+    }
+    .countdown-number {
+      font-size: 72px;
+      font-weight: bold;
+      margin: 20px 0;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    }
+    .countdown-message {
+      font-size: 16px;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+<body>
+  <div class="countdown-container">
+    <div class="countdown-title">即将打开自助报告打印页面</div>
+    <div class="countdown-number" id="countdown">${DELAY_SECONDS}</div>
+    <div class="countdown-message">请稍候...</div>
+  </div>
+  <script>
+    let remaining = ${DELAY_SECONDS};
+    const countdownEl = document.getElementById('countdown');
+    const timer = setInterval(() => {
+      remaining--;
+      if (remaining > 0) {
+        countdownEl.textContent = remaining;
+      } else {
+        clearInterval(timer);
+      }
+    }, 1000);
+  </script>
+</body>
+</html>

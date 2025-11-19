@@ -124,8 +124,8 @@
           </template>
           <el-col v-if="setTab === 'advancedSet'" :span="24">
             <el-form-item>
-              <div style="margin-bottom: 8px;">
-                <span style="font-weight: 500;">自助报告打印</span>
+              <div>
+                <span>自助报告打印</span>
               </div>
               <el-row :gutter="12">
                 <el-col :span="4">
@@ -145,6 +145,63 @@
                   ></el-input>
                 </el-col>
               </el-row>
+              <!-- 延迟时间配置 -->
+              <div v-if="formData.autoOpenUrl" style="margin-top: 10px;">
+                <el-row :gutter="12">
+                  <el-col :span="4">
+                    <div>
+                      <span>延迟(秒)</span>
+                    </div>
+                  </el-col>
+                  <el-col :span="8">
+                    <el-input-number
+                      v-model="formData.autoOpenUrlDelay"
+                      :min="0"
+                      :max="300"
+                      :step="5"
+                      placeholder="延迟秒数"
+                      style="width: 100%;"
+                    />
+                    <div>延迟秒数 (0-300)</div>
+                  </el-col>
+                </el-row>
+                <el-row :gutter="12" style="display: none;">
+                  <el-col :span="6">
+                    <div>
+                      <span>重试间隔秒</span>
+                    </div>
+                  </el-col>
+                  <el-col :span="8">
+                    <el-input-number
+                      v-model="formData.autoOpenUrlRetryInterval"
+                      :min="5"
+                      :max="60"
+                      :step="5"
+                      placeholder="重试间隔"
+                      style="width: 100%;"
+                    />
+                    <div>重试间隔秒 (5-60)</div>
+                  </el-col>
+                </el-row>
+                <el-row :gutter="12" style="display: none;">
+                  <el-col :span="6">
+                    <div>
+                      <span>重试次数</span>
+                    </div>
+                  </el-col>
+                  <el-col :span="8">
+                    <el-input-number
+                      v-model="formData.autoOpenUrlMaxRetries"
+                      :min="1"
+                      :max="20"
+                      :step="1"
+                      placeholder="最大重试次数"
+                      style="width: 100%;"
+                    />
+                    <div>最大重试次数 (1-20)</div>
+                  </el-col>
+                </el-row>
+              </div>
             </el-form-item>
           </el-col>
           <el-col :span="24">
@@ -219,6 +276,9 @@
               defaultPrinter: "",
               autoOpenUrl: false,
               autoOpenUrlValue: DEFAULT_SELF_SERVICE_PRINT_URL,
+              autoOpenUrlDelay: 0,
+              autoOpenUrlRetryInterval: 10,
+              autoOpenUrlMaxRetries: 6,
             },
             // 预制的版本，解决部分内网无法获取新版本的问题
             versions: [
@@ -584,6 +644,16 @@
           if (this.formData.autoOpenUrl && !this.formData.autoOpenUrlValue) {
             this.formData.autoOpenUrlValue = DEFAULT_SELF_SERVICE_PRINT_URL;
           }
+          // 确保隐藏的配置项有正确的默认值（修复旧版本配置）
+          if (typeof this.formData.autoOpenUrlDelay !== 'number' || this.formData.autoOpenUrlDelay < 0 || this.formData.autoOpenUrlDelay > 300) {
+            this.formData.autoOpenUrlDelay = 0;
+          }
+          if (typeof this.formData.autoOpenUrlRetryInterval !== 'number' || this.formData.autoOpenUrlRetryInterval < 10 || this.formData.autoOpenUrlRetryInterval > 60) {
+            this.formData.autoOpenUrlRetryInterval = 10;
+          }
+          if (typeof this.formData.autoOpenUrlMaxRetries !== 'number' || this.formData.autoOpenUrlMaxRetries < 6 || this.formData.autoOpenUrlMaxRetries > 20) {
+            this.formData.autoOpenUrlMaxRetries = 6;
+          }
           // this.getVersions();
           this.getPrintersList();
         },
@@ -609,6 +679,11 @@
                 .getBoundingClientRect();
               height = Math.ceil(height);
               width = Math.ceil(width);
+
+              if (this.setTab === 'advancedSet') {
+                height += 40;
+              }
+
               ipc.send("setContentSize", {
                 width,
                 height,
@@ -627,11 +702,21 @@
               pageNum: 1,
             };
 
-            if(this.formData.defaultPrinter) {
-              data.printer = this.formData.defaultPrinter;
+            if(this.formData.connectTransit) {
+              console.log("【debug】代理打印====");
+            //   ipcRenderer.send("do", data);
+              data.clientType = "transit";
+              data.replyId = 'rid-' + new Date().getTime();
+              // data.socketId = "transit";
               ipc.send('print-new-test', data);
             } else {
-              this.$message.error('请在 高级设置 中选择默认打印机进行打印测试');
+              console.log("【debug】非代理打印====");
+              if(this.formData.defaultPrinter) {
+                data.printer = this.formData.defaultPrinter;
+                ipc.send('print-new-test', data);
+              } else {
+                this.$message.error('请在 高级设置 中选择默认打印机进行打印测试');
+              }
             }
           },
           /**

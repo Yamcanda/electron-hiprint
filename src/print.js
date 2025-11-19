@@ -58,7 +58,8 @@ function initPrintEvent() {
   });
 
   ipcMain.on("print-new-test", async (event, data) => {
-    console.info(data);
+    const jsonData = JSON.stringify(data);
+    console.log(`"【debug】print-new-test 测试打印：" ${jsonData}`);
     PRINT_WINDOW.webContents.send("print-new", data);
   });
 
@@ -210,7 +211,7 @@ function initPrintEvent() {
                   templateId: data.templateId,
                   replyId: data.replyId,
                 };
-                socket.emit("successs", result); // 兼容 vue-plugin-hiprint 0.0.56 之前包
+                // socket.emit("successs", result); // 兼容 vue-plugin-hiprint 0.0.56 之前包
                 socket.emit("success", result);
               }
               logPrintResult("success");
@@ -262,7 +263,7 @@ function initPrintEvent() {
                 templateId: data.templateId,
                 replyId: data.replyId,
               };
-              socket.emit("successs", result); // 兼容 vue-plugin-hiprint 0.0.56 之前包
+              // socket.emit("successs", result); // 兼容 vue-plugin-hiprint 0.0.56 之前包
               socket.emit("success", result);
             });
           }
@@ -395,6 +396,14 @@ function initPrintEvent() {
         pageSize: data.pageSize, // 打印纸张
       },
       (success, failureReason) => {
+        const debugHtmlData = data.html;
+        const codeNumMatch = "测试打印";
+        if(debugHtmlData.indexOf(codeNumMatch) < 0) {
+          const codeNumReg = /<div[^>]*>(\d{10,16})<\/div>/;
+          const match = debugHtmlData.match(codeNumReg);
+          codeNumMatch = match ? match[1] : "未找到条码/回执等编号";
+        }
+        
         if (success) {
           var printTime = (new Date().getTime()) - st;
           console.log(
@@ -402,14 +411,17 @@ function initPrintEvent() {
               data.templateId
             }】 打印成功，打印类型 HTML，打印机：${deviceName}，页数：${
               data.pageNum
-            }，time: ${printTime}`,
+            }，codeNum：${codeNumMatch}, time: ${printTime}`,
           );
           logPrintResult("success");
         } else {
+          var printTime = (new Date().getTime()) - st;
           console.log(
             `${data.replyId ? "中转服务" : "插件端"} ${socket?.id} 模板 【${
               data.templateId
-            }】 打印失败，打印类型 HTML，打印机：${deviceName}，原因：${failureReason}`,
+            }】 打印失败，打印类型 HTML，打印机：${deviceName}，原因：${
+              failureReason
+            }，codeNum：${codeNumMatch}, time: ${printTime}`,
           );
           logPrintResult("failed", failureReason);
         }

@@ -102,6 +102,111 @@ global.SOCKET_CLIENT = null;
 global.LOADING_BROWSER_VIEW = null;
 // 是否已通过autoOpenUrl显示窗口
 global.AUTO_OPEN_URL_SHOWN = false;
+
+/**
+ * 加载HTML模板文件并替换变量
+ * @param {string} templatePath - 模板文件路径
+ * @param {Object} variables - 要替换的变量
+ * @returns {string} 替换后的HTML字符串
+ */
+async function loadTemplate(templatePath, variables) {
+  try {
+    const templatePathAbs = path.join(app.getAppPath(), templatePath);
+    const fs = require('fs');
+    const templateContent = fs.readFileSync(templatePathAbs, 'utf-8');
+
+    let result = templateContent;
+    for (const [key, value] of Object.entries(variables)) {
+      const regex = new RegExp(`\\$\\{${key}\\}`, 'g');
+      result = result.replace(regex, value);
+    }
+    return result;
+  } catch (error) {
+    console.error(`加载模板失败: ${templatePath}`, error);
+    return `<html><body><h1>加载模板失败: ${templatePath}</h1></body></html>`;
+  }
+}
+
+/**
+ * 加载HTML模板到窗口
+ * @param {BrowserWindow} window - 目标窗口
+ * @param {string} templatePath - 模板文件路径
+ * @param {Object} variables - 模板变量
+ */
+async function loadHtmlToWindow(window, templatePath, variables) {
+  const htmlContent = await loadTemplate(templatePath, variables);
+  const dataUri = `data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`;
+  await window.webContents.loadURL(dataUri);
+}
+
+// 延迟打开URL并重试的函数
+async function loadUrlWithRetry(mainWindow, url, delaySeconds, retryInterval, maxRetries) {
+  let currentRetry = 0;
+  let remainingDelay = delaySeconds;
+
+  // 确保窗口显示出来（用于立即打开的情况）
+  if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+
+  // 显示倒计时到控制台和UI
+  if (delaySeconds > 0) {
+    console.log(`将延迟 ${delaySeconds} 秒打开URL...`);
+
+    // 加载倒计时页面
+    await loadHtmlToWindow(mainWindow, 'assets/countdown.html', {
+      DELAY_SECONDS: delaySeconds
+    });
+
+    const countdown = setInterval(() => {
+      remainingDelay--;
+      if (remainingDelay > 0) {
+        console.log(`倒计时：${remainingDelay} 秒后打开地址`);
+      } else {
+        clearInterval(countdown);
+      }
+    }, 1000);
+
+    // 等待延迟时间
+    await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
+  }
+
+  // 尝试加载URL，带重试机制
+  while (currentRetry < maxRetries) {
+    try {
+      console.log(`尝试加载URL (第 ${currentRetry + 1} 次)...`);
+      await mainWindow.webContents.loadURL(url);
+      global.AUTO_OPEN_URL_SHOWN = true;
+      console.log('URL加载成功');
+      return true;
+    } catch (error) {
+      currentRetry++;
+      console.error(`URL加载失败 (第 ${currentRetry} 次):`, error.message);
+      console.error(`重试配置: 间隔=${retryInterval}秒, 最大重试=${maxRetries}次, 当前已重试=${currentRetry - 1}次`);
+
+      if (currentRetry >= maxRetries) {
+        console.error(`URL加载失败，已达到最大重试次数 (${maxRetries})`);
+        // 重试失败后，加载默认页面并显示错误信息
+        const indexHtml = path.join("file://", app.getAppPath(), "assets/index.html");
+        await mainWindow.webContents.loadURL(indexHtml);
+        return false;
+      }
+
+      // 显示错误提示和重试页面
+      await loadHtmlToWindow(mainWindow, 'assets/error.html', {
+        URL: url,
+        CURRENT_RETRY: currentRetry,
+        REMAINING_RETRIES: maxRetries - currentRetry,
+        RETRY_INTERVAL: retryInterval
+      });
+
+      // 等待重试间隔
+      console.log(`等待 ${retryInterval} 秒后重试...`);
+      await new Promise(resolve => setTimeout(resolve, retryInterval * 1000));
+    }
+  }
+}
+
 // 打印队列，解决打印并发崩溃问题
 global.PRINT_RUNNER = new TaskRunner({ concurrency: 1 });
 // 打印队列 done 集合
@@ -247,10 +352,45 @@ async function createWindow() {
   // 检查是否需要启动时打开自定义页面
   if (store.get("autoOpenUrl") && store.get("autoOpenUrlValue")) {
     const url = store.get("autoOpenUrlValue");
-    // 加载URL
-    MAIN_WINDOW.webContents.loadURL(url);
-    // 设置一个标志，表示已经手动显示了窗口
-    global.AUTO_OPEN_URL_SHOWN = true;
+    let delaySeconds = store.get("autoOpenUrlDelay");
+    let retryInterval = store.get("autoOpenUrlRetryInterval");
+    let maxRetries = store.get("autoOpenUrlMaxRetries");
+
+    // console.log(`[DEBUG] 从 store 读取的原始配置:`, {
+    //   autoOpenUrlDelay: delaySeconds,
+    //   autoOpenUrlRetryInterval: retryInterval,
+    //   autoOpenUrlMaxRetries: maxRetries,
+    //   typeof_delaySeconds: typeof delaySeconds,
+    //   typeof_retryInterval: typeof retryInterval,
+    //   typeof_maxRetries: typeof maxRetries
+    // });
+
+    // 确保配置值合理
+    // 延迟时间：0-300秒
+    if (typeof delaySeconds !== 'number' || delaySeconds < 0 || delaySeconds > 300) {
+      // console.log(`[DEBUG] 修正延迟时间: ${delaySeconds} -> 0`);
+      delaySeconds = 0;
+    }
+    // 重试间隔：至少5秒（但默认应该是10秒）
+    if (typeof retryInterval !== 'number' || retryInterval < 5 || retryInterval > 60) {
+      // console.log(`[DEBUG] 修正重试间隔: ${retryInterval} -> 10`);
+      retryInterval = 10;
+    }
+    // 最大重试次数：至少6次
+    if (typeof maxRetries !== 'number' || maxRetries < 6 || maxRetries > 20) {
+      // console.log(`[DEBUG] 修正最大重试次数: ${maxRetries} -> 6`);
+      maxRetries = 6;
+    }
+
+    // console.log('自助报告打印配置（验证后）:', {
+    //   url,
+    //   delaySeconds,
+    //   retryInterval,
+    //   maxRetries
+    // });
+
+    // 使用延迟打开和重试机制
+    loadUrlWithRetry(MAIN_WINDOW, url, delaySeconds, retryInterval, maxRetries);
   } else {
     // 加载主页面
     const indexHtml = path.join("file://", app.getAppPath(), "assets/index.html");
@@ -434,6 +574,15 @@ async function createWindow() {
       if (!app.isPackaged) {
         MAIN_WINDOW.webContents.openDevTools();
       }
+    } catch (error) {
+      console.error("主窗口 Dom 加载失败!", error);
+    }
+  });
+
+  // 初始化服务器（只在第一次窗口创建时执行）
+  if (!global.SERVER_INITIALIZED) {
+    try {
+      console.log("初始化服务器...");
       // 本地服务开启端口监听
       server.listen({port: store.get("port") || 17521, host: '0.0.0.0'});
       // 初始化本地 服务端事件
@@ -457,16 +606,18 @@ async function createWindow() {
         // 初始化中转 客户端事件
         initClientEvent();
       }
+      global.SERVER_INITIALIZED = true;
+      console.log("服务器初始化完成");
     } catch (error) {
-      console.error(error);
+      console.error("服务器初始化失败:", error);
     }
-  });
+  }
 
   // 初始化托盘
   initTray();
 
   // 添加全局键盘事件监听器，作为保底方案
-  console.log("==> 注册全局快捷键（保底方案） <==");
+  console.log("==> 注册全局快捷键 <==");
   globalShortcut.register("Escape", () => {
     try {
       if (MAIN_WINDOW && MAIN_WINDOW.isFullScreen()) {
