@@ -9,7 +9,7 @@ const { app, globalShortcut } = require("electron");
 exports.appQuit = function() {
   console.log("==> Electron-hiprint 关闭 <==");
   // 清理全局快捷键
-  if (globalShortcut) {
+  if (globalShortcut && app.isReady()) {
     globalShortcut.unregisterAll();
   }
   SET_WINDOW && SET_WINDOW.destroy();

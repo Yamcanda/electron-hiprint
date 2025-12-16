@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>连接失败 - 打印服务</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    .error-container {
+      text-align: center;
+      padding: 40px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+      max-width: 600px;
+    }
+    .error-icon {
+      font-size: 64px;
+      margin-bottom: 20px;
+    }
+    .error-title {
+      font-size: 28px;
+      margin-bottom: 20px;
+      font-weight: bold;
+    }
+    .error-message {
+      font-size: 18px;
+      margin-bottom: 20px;
+      opacity: 0.9;
+      line-height: 1.6;
+    }
+    .url-display {
+      font-size: 14px;
+      opacity: 0.6;
+      margin-bottom: 30px;
+      word-break: break-all;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+    }
+    .contact-info {
+      font-size: 16px;
+      padding: 20px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 12px;
+      margin-top: 20px;
+      color: #FFD700;
+    }
+    .retry-button {
+      margin-top: 30px;
+      padding: 12px 30px;
+      font-size: 16px;
+      background: rgba(255, 255, 255, 0.2);
+      border: 2px solid rgba(255, 255, 255, 0.4);
+      border-radius: 8px;
+      color: white;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    .retry-button:hover {
+      background: rgba(255, 255, 255, 0.3);
+      border-color: rgba(255, 255, 255, 0.6);
+      transform: translateY(-2px);
+    }
+  </style>
+</head>
+<body>
+  <div class="error-container">
+    <div class="error-icon">❌</div>
+    <div class="error-title">无法打开页面</div>
+    <div class="error-message">
+      很抱歉，自助报告打印页面无法正常访问。<br>
+      请检查配置或联系管理员。
+    </div>
+    <div class="url-display">${URL}</div>
+
+    <div class="contact-info">
+      💡 建议：<br>
+      1. 检查网络连接是否正常<br>
+      2. 确认自助报告打印地址配置正确<br>
+      3. 联系系统管理员获取帮助
+    </div>
+  </div>
+
+  <script>
+    console.log('自助报告打印错误页面已加载');
+  </script>
+</body>
+</html>

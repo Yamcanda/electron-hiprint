@@ -221,11 +221,120 @@ function getMachineId() {
 }
 
 /**
+ * @description: 从缓存查询打印机信息
+ * @param {string} printerName - 打印机名称或显示名称
+ * @return {Object|null} - 缓存中的打印机信息，包含 clientId 和 originalName
+ */
+function queryPrinterCache(printerName) {
+  try {
+    // 如果没有缓存，返回null
+    if (!global.TRANSIT_PRINTERS_CACHE) {
+      return null;
+    }
+
+    // 如果直接匹配显示名称，返回结果
+    if (global.TRANSIT_PRINTERS_CACHE[printerName]) {
+      return global.TRANSIT_PRINTERS_CACHE[printerName];
+    }
+
+    // 如果是 clientId 格式，遍历查找匹配项
+    const looksLikeClientId = printerName && printerName.length >= 15;
+    if (looksLikeClientId) {
+      for (const [displayName, info] of Object.entries(global.TRANSIT_PRINTERS_CACHE)) {
+        if (info.clientId === printerName) {
+          return info;
+        }
+      }
+    }
+
+    // 如果没有直接匹配，尝试去掉IP前缀匹配
+    let cleanName = printerName;
+    if (printerName && printerName.includes('] ')) {
+      cleanName = printerName.substring(printerName.indexOf('] ') + 2);
+    }
+
+    // 遍历查找匹配项
+    for (const [displayName, info] of Object.entries(global.TRANSIT_PRINTERS_CACHE)) {
+      // 匹配原始名称
+      if (info.originalName === cleanName) {
+        return info;
+      }
+      // 匹配去掉IP前缀的显示名称
+      const cleanDisplayName = displayName.includes('] ') ? displayName.substring(displayName.indexOf('] ') + 2) : displayName;
+      if (cleanDisplayName === cleanName) {
+        return info;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    console.error('查询缓存失败:', error);
+    return null;
+  }
+}
+
+/**
+ * @description: 检查一个打印机是否是本机的打印机
+ * @param {string} printerName - 打印机名称或显示名称
+ * @return {boolean} - 如果是本机打印机返回true，否则返回false
+ */
+function isLocalPrinter(printerName) {
+  try {
+    // 如果没有本机clientId，说明还没有初始化，无法判断
+    if (!global.LOCAL_CLIENT_ID) {
+      return false;
+    }
+
+    // 如果没有缓存，无法判断，需要依赖其他逻辑
+    if (!global.TRANSIT_PRINTERS_CACHE || Object.keys(global.TRANSIT_PRINTERS_CACHE).length === 0) {
+      return false;
+    }
+
+    // 如果printerName看起来像clientId，检查是否为本机clientId
+    const looksLikeClientId = printerName && printerName.length >= 15;
+    if (looksLikeClientId) {
+      if (printerName === global.LOCAL_CLIENT_ID) {
+        return true;
+      }
+    }
+
+    // 检查缓存中是否有这个打印机的信息
+    if (global.TRANSIT_PRINTERS_CACHE[printerName]) {
+      const info = global.TRANSIT_PRINTERS_CACHE[printerName];
+      if (info.clientId === global.LOCAL_CLIENT_ID) {
+        return true;
+      }
+    }
+
+    // 如果printerName包含IP前缀，尝试匹配
+    if (printerName && printerName.includes('] ')) {
+      const cleanName = printerName.substring(printerName.indexOf('] ') + 2);
+      // 遍历查找匹配项
+      for (const [displayName, info] of Object.entries(global.TRANSIT_PRINTERS_CACHE)) {
+        if (info.clientId === global.LOCAL_CLIENT_ID) {
+          // 本机clientId匹配，进一步检查打印机名称
+          const displayCleanName = displayName.includes('] ') ? displayName.substring(displayName.indexOf('] ') + 2) : displayName;
+          if (displayCleanName === cleanName || info.originalName === cleanName) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  } catch (error) {
+    console.error('检查本机打印机失败:', error);
+    return false;
+  }
+}
+
+/**
  * @description: 抛出当前客户端信息，提供更多有价值的信息，逐步替换原有 address
- * @param {io.Socket} socket
+ * @param {io.Socket} socket - socket连接
+ * @param {string} customClientId - 可选的自定义clientId，默认使用socket.id
  * @return {void}
  */
-function emitClientInfo(socket) {
+function emitClientInfo(socket, customClientId) {
   _address.mac().then((mac) => {
     socket.emit("clientInfo", {
       hostname: os.hostname(), // 主机名
@@ -238,6 +347,7 @@ function emitClientInfo(socket) {
       clientUrl: `http://${_address.ip()}:${store.get("port") || 17521}`, // 客户端地址
       machineId: getMachineId(), // 客户端唯一id
       nickName: store.get("nickName"), // 客户端昵称
+      clientId: customClientId || socket.id, // 客户端socket id，用于中转服务转发
     });
   });
 }
@@ -310,7 +420,7 @@ function initServeEvent(server) {
   if (!server) return false;
 
   /**
-   * @description: 校验 token
+   * @description: 校验 token 并设置 clientId
    */
   server.use((socket, next) => {
     const token = store.get("token");
@@ -324,6 +434,8 @@ function initServeEvent(server) {
       };
       next(err);
     } else {
+      // 设置 clientId 为 socket.id
+      socket.clientId = socket.id;
       next();
     }
   });
@@ -349,6 +461,36 @@ function initServeEvent(server) {
       });
       // 显示通知
       notification.show();
+    }
+
+    // 设置本机 clientId（使用第一个连接的客户端ID）
+    // 但不要覆盖已经连接中转服务时设置的 SERVER socket.id
+
+    // 只有当 LOCAL_CLIENT_ID 是初始的 "local-*" 值时，才更新为 SERVER 的 socket.id
+    // 如果已经是非"local-"格式的值（说明已经生成过socket.id格式的），则保持不变
+    const isInitialClientId = global.LOCAL_CLIENT_ID && global.LOCAL_CLIENT_ID.startsWith('local-');
+    if (isInitialClientId) {
+      global.LOCAL_CLIENT_ID = socket.id;
+    }
+
+    // 同步到渲染进程（使用本机 clientId，不是 socket.id）
+    if (MAIN_WINDOW && MAIN_WINDOW.webContents) {
+      MAIN_WINDOW.webContents.executeJavaScript(`
+        window.localClientId = '${global.LOCAL_CLIENT_ID}';
+        console.log('同步本机 clientId 到渲染进程: ${global.LOCAL_CLIENT_ID}');
+      `).catch((err) => {
+        console.error('同步到渲染进程失败:', err);
+      });
+    }
+
+    // 如果设置窗口已打开，也同步到设置窗口
+    if (SET_WINDOW && SET_WINDOW.webContents) {
+      SET_WINDOW.webContents.executeJavaScript(`
+        window.localClientId = '${global.LOCAL_CLIENT_ID}';
+        console.log('同步本机 clientId 到设置窗口: ${global.LOCAL_CLIENT_ID}');
+      `).catch((err) => {
+        console.error('同步到设置窗口失败:', err);
+      });
     }
 
     // 向 client 发送打印机列表
@@ -402,11 +544,75 @@ function initServeEvent(server) {
      * @description: client 请求刷新打印机列表
      */
     socket.on("refreshPrinterList", async () => {
-      console.log(`插件端 ${socket.id}: refreshPrinterList`);
-      socket.emit(
-        "printerList",
-        await MAIN_WINDOW.webContents.getPrintersAsync(),
-      );
+      // 本机作为 SERVER，需要汇总所有连接的 CLIENT 的打印机列表
+      // 包括：
+      // 1. 直接连接本机 SERVER 的 web 应用（但它们没有打印机）
+      // 2. 本机作为 CLIENT 连接的上级中央中转服务（如果有）
+
+      const allPrinters = [];
+      let processedCount = 0;
+      const totalClients = 1 + (global.SOCKET_CLIENT?.connected ? 1 : 0); // 本机 + 上级中转服务
+
+      // 1. 添加本机打印机
+      try {
+        const localPrinters = await MAIN_WINDOW.webContents.getPrintersAsync();
+        
+        localPrinters.forEach(printer => {
+          allPrinters.push({
+            ...printer,
+            server: {
+              clientId: global.LOCAL_CLIENT_ID,
+              hostname: os.hostname(),
+              version: app.getVersion(),
+              platform: process.platform,
+              arch: process.arch,
+              mac: 'N/A',
+              ip: _address.ip(),
+              ipv6: _address.ipv6(),
+              clientUrl: `http://${_address.ip()}:${store.get("port") || 17521}`,
+              machineId: getMachineId(),
+              nickName: store.get("nickName"),
+            }
+          });
+        });
+        processedCount++;
+      } catch (error) {
+        console.error('获取本机打印机列表失败:', error);
+        processedCount++;
+      }
+
+      // 2. 如果连接了上级中央中转服务，请求汇总的打印机列表
+      if (global.SOCKET_CLIENT && global.SOCKET_CLIENT.connected) {
+        // 使用 replyId 机制确保收到响应
+        const replyId = `rid-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const timeout = setTimeout(() => {
+          completeAndReturn();
+        }, 5000);
+
+        const originalHandler = (printers) => {
+          clearTimeout(timeout);
+          global.SOCKET_CLIENT.removeListener(`printerList-${replyId}`, originalHandler);
+
+          if (printers && Array.isArray(printers)) {
+            printers.forEach(printer => {
+              allPrinters.push(printer);
+            });
+          }
+
+          processedCount++;
+          completeAndReturn();
+        };
+
+        global.SOCKET_CLIENT.on(`printerList-${replyId}`, originalHandler);
+        global.SOCKET_CLIENT.emit("refreshPrinterList", { replyId });
+
+        function completeAndReturn() {
+          socket.emit("printerList", allPrinters);
+        }
+      } else {
+        // 没有连接上级中转服务，直接返回本机打印机
+        socket.emit("printerList", allPrinters);
+      }
     });
 
     /**
@@ -502,14 +708,103 @@ function initServeEvent(server) {
      */
     socket.on("news", (data) => {
       if (data) {
-        PRINT_RUNNER.add((done) => {
-          data.socketId = socket.id;
-          data.taskId = uuidv7();
-          data.clientType = "local";
-          PRINT_WINDOW.webContents.send("print-new", data);
-          MAIN_WINDOW.webContents.send("printTask", true);
-          PRINT_RUNNER_DONE[data.taskId] = done;
-        });
+        // 检查是否指定了目标客户端 (printer 参数可能是 clientId)
+        const targetClientId = data.printer;
+        const looksLikeClientId = targetClientId && targetClientId.length >= 15;
+        const isLocalClientId = looksLikeClientId && targetClientId === global.LOCAL_CLIENT_ID;
+
+        // 如果是本机的客户端ID，在本机执行打印
+        if (isLocalClientId) {
+          // 使用本机实际打印机名称，而不是 clientId
+          // 去掉前缀 [IP地址] 获取纯打印机名称
+          let localPrinter = store.get("defaultPrinter") || "";
+          if (localPrinter && localPrinter.includes('] ')) {
+            localPrinter = localPrinter.substring(localPrinter.indexOf('] ') + 2);
+          }
+          PRINT_RUNNER.add((done) => {
+            data.socketId = socket.id;
+            data.taskId = uuidv7();
+            data.clientType = "local";
+            // 不修改 data.printer，保持原始的 clientId 用于结果反馈
+            // 但传递 localPrinter 给打印窗口
+            const printData = { ...data, printer: localPrinter };
+            PRINT_WINDOW.webContents.send("print-new", printData);
+            MAIN_WINDOW.webContents.send("printTask", true);
+            PRINT_RUNNER_DONE[data.taskId] = done;
+          });
+        } else if (targetClientId && targetClientId !== socket.id && looksLikeClientId) {
+          // 检查是否是远程客户端ID，如果是远程但未连接中转服务，给出提示
+          const cacheResult = queryPrinterCache(data.printer);
+          if (cacheResult && (!global.SOCKET_CLIENT || !global.SOCKET_CLIENT.connected)) {
+            // 这是远程打印机，但未连接中转服务
+            console.log(`客户端 ${targetClientId} 不在线，且未连接中央中转服务，打印机：${data.printer}`);
+            socket.emit("error", {
+              msg: `您选择的是远程打印机（${data.printer}），但未连接中转服务。请选择不带IP前缀的本机打印机进行打印。`,
+              templateId: data.templateId,
+              replyId: data.replyId,
+            });
+            return;
+          }
+          // 如果指定了其他客户端ID，则转发给目标客户端
+
+          const targetSocket = SOCKET_SERVER.sockets.sockets.get(targetClientId);
+
+          if (targetSocket) {
+            targetSocket.emit("news", data);
+          } else {
+            // 如果连接了中央中转服务，转发给中央中转服务
+            if (global.SOCKET_CLIENT && global.SOCKET_CLIENT.connected) {
+
+              // 提取实际的打印机名称（去掉IP前缀）
+              let actualPrinterName = data.printer;
+              if (actualPrinterName && actualPrinterName.includes('] ')) {
+                actualPrinterName = actualPrinterName.substring(actualPrinterName.indexOf('] ') + 2);
+              }
+
+              // 确定目标客户端ID
+              // 如果targetClientId看起来像clientId，直接使用
+              // 否则从缓存查询
+              const looksLikeClientId = targetClientId && targetClientId.length >= 15;
+
+              if (!looksLikeClientId) {
+                // printer可能是显示名称，需要从缓存查询clientId
+                const cacheResult = queryPrinterCache(data.printer);
+                if (cacheResult) {
+                  targetClientId = cacheResult.clientId;
+                  actualPrinterName = cacheResult.originalName || actualPrinterName;
+                } else {
+                  targetClientId = data.printer; // 回退到原始值
+                }
+              }
+
+              // 将printer参数映射为client参数，供中转服务识别
+              // 中转服务期望"client"字段来识别目标客户端，而不是"printer"
+              const forwardData = {
+                ...data,
+                client: targetClientId,  // 使用clientId而不是printer名称
+                printer: actualPrinterName  // 传递实际的打印机名称（去掉IP前缀）
+              };
+
+              global.SOCKET_CLIENT.emit("news", forwardData);
+            } else {
+              socket.emit("error", {
+                msg: `客户端 ${targetClientId} 不在线，且未连接中央中转服务`,
+                templateId: data.templateId,
+                replyId: data.replyId,
+              });
+            }
+          }
+        } else {
+          // 没有指定目标客户端或就是自己，在本地执行打印
+          PRINT_RUNNER.add((done) => {
+            data.socketId = socket.id;
+            data.taskId = uuidv7();
+            data.clientType = "local";
+            PRINT_WINDOW.webContents.send("print-new", data);
+            MAIN_WINDOW.webContents.send("printTask", true);
+            PRINT_RUNNER_DONE[data.taskId] = done;
+          });
+        }
       }
     });
 
@@ -615,9 +910,15 @@ function initClientEvent() {
    * @description: 连接中转服务成功，绑定 socket 事件
    */
   client.on("connect", async () => {
-    console.log(`【debug】==> 中转服务 Connected Transit Server: ${client.id}`);
-    // 通知渲染进程已连接
-    MAIN_WINDOW.webContents.send("clientConnection", true);
+    console.log(`==> 中转服务 Connect: ${client.id}`);
+
+    // 立即发送连接状态（dom-ready 事件也会检查并发送，确保状态同步）
+    if (MAIN_WINDOW && MAIN_WINDOW.webContents && !MAIN_WINDOW.isDestroyed()) {
+      console.log('发送 clientConnection: true 到渲染进程');
+      MAIN_WINDOW.webContents.send("clientConnection", true);
+    } else {
+      console.log('MAIN_WINDOW 尚未准备好，等待 dom-ready 事件');
+    }
 
     // 判断是否允许通知
     if (store.get("allowNotify")) {
@@ -630,14 +931,26 @@ function initClientEvent() {
       notification.show();
     }
 
-    // 向 中转服务 发送打印机列表
-    client.emit(
-      "printerList",
-      await MAIN_WINDOW.webContents.getPrintersAsync(),
-    );
+    // 同步到渲染进程（保持使用 SERVER 的 socket.id，而不是 CLIENT 的）
+    if (MAIN_WINDOW && MAIN_WINDOW.webContents) {
+      MAIN_WINDOW.webContents.executeJavaScript(`
+        window.localClientId = '${global.LOCAL_CLIENT_ID}';
+        console.log('同步本机 clientId 到渲染进程（基于 SERVER）: ${global.LOCAL_CLIENT_ID}');
+      `).catch(() => {});
+    }
 
-    // 向 中转服务 发送客户端信息
-    emitClientInfo(client);
+    // 向 中转服务 发送打印机列表
+    const printers = await MAIN_WINDOW.webContents.getPrintersAsync();
+    client.emit("printerList", printers);
+
+    // 向 中转服务 发送客户端信息（使用 SERVER 的 socket.id）
+    emitClientInfo(client, global.LOCAL_CLIENT_ID);
+
+    // 延迟3秒后，主动请求最新的 printerList（包含所有客户端的）
+    // 这样可以确保本机收到汇总结果并更新 clientId
+    setTimeout(() => {
+      client.emit("refreshPrinterList");
+    }, 3000);
   });
 
   /**
@@ -645,18 +958,40 @@ function initClientEvent() {
    */
   client.on("getClientInfo", () => {
     console.log(`中转服务 ${client.id}: getClientInfo`);
-    emitClientInfo(client);
+    // 中转服务请求客户端信息时，也使用 SERVER 的 socket.id
+    emitClientInfo(client, global.LOCAL_CLIENT_ID);
   });
 
   /**
    * @description: 中转服务 请求刷新打印机列表
    */
-  client.on("refreshPrinterList", async () => {
-    console.log(`中转服务 ${client.id}: refreshPrinterList`);
-    client.emit(
-      "printerList",
-      await MAIN_WINDOW.webContents.getPrintersAsync(),
-    );
+  client.on("refreshPrinterList", async (data) => {
+    const printers = await MAIN_WINDOW.webContents.getPrintersAsync();
+
+    // 为每个打印机添加服务器信息
+    const printersWithServer = printers.map(printer => ({
+      ...printer,
+      server: {
+        clientId: global.LOCAL_CLIENT_ID,
+        hostname: os.hostname(),
+        version: app.getVersion(),
+        platform: process.platform,
+        arch: process.arch,
+        mac: 'N/A',
+        ip: _address.ip(),
+        ipv6: _address.ipv6(),
+        clientUrl: `http://${_address.ip()}:${store.get("port") || 17521}`,
+        machineId: getMachineId(),
+        nickName: store.get("nickName"),
+      }
+    }));
+
+    // 如果有 replyId，返回给指定的 replyId，否则发送到默认事件
+    if (data && data.replyId) {
+      client.emit(`printerList-${data.replyId}`, printersWithServer);
+    } else {
+      client.emit("printerList", printersWithServer);
+    }
   });
 
   /**
@@ -736,14 +1071,178 @@ function initClientEvent() {
    */
   client.on("news", (data) => {
     if (data) {
-      PRINT_RUNNER.add((done) => {
-        data.socketId = client.id;
-        data.taskId = uuidv7();
-        data.clientType = "transit";
-        PRINT_WINDOW.webContents.send("print-new", data);
-        MAIN_WINDOW.webContents.send("printTask", true);
-        PRINT_RUNNER_DONE[data.taskId] = done;
-      });
+      // 检查是否指定了目标客户端 (printer 或 client 参数可能是 clientId)
+      // 注意：中转服务转发时会将 printer 映射为 client
+      const targetClientId = data.client || data.printer;
+      const looksLikeClientId = targetClientId && targetClientId.length >= 15;
+
+      // 只有当这个打印请求不是来自本地（replyId存在），才需要转发到其他客户端
+      // 如果是本地的打印请求，需要检查目标是否为本机
+      if (data.replyId) {
+        // 这是从另一个客户端转发过来的远程打印请求
+        // 检查目标是否是本机
+        const isTargetLocal = targetClientId === global.LOCAL_CLIENT_ID;
+
+        if (isTargetLocal) {
+          // 目标为本机，在本机执行打印
+          // 如果请求中包含 client 参数（中转服务转发的请求），需要将 client 转换回 printer
+          // 这是因为本机在发送请求时将 printer 映射为了 client，现在需要还原
+          if (data.client && !data.printer) {
+            data.printer = data.client;
+          }
+
+          // 从 data.printer 中提取实际打印机名称
+          // data.printer 可能是 displayName "[IP] 打印机名称" 或原始打印机名称
+          let actualPrinterName = data.printer;
+          if (actualPrinterName && actualPrinterName.includes('] ')) {
+            actualPrinterName = actualPrinterName.substring(actualPrinterName.indexOf('] ') + 2);
+          }
+
+          PRINT_RUNNER.add((done) => {
+            data.socketId = client.id;
+            data.taskId = uuidv7();
+            data.clientType = "transit";
+            // 不修改 data.printer，保持原始的 displayName/clientId 用于结果反馈
+            // 但传递 actualPrinterName 给打印窗口
+            const printData = { ...data, printer: actualPrinterName };
+            PRINT_WINDOW.webContents.send("print-new", printData);
+            MAIN_WINDOW.webContents.send("printTask", true);
+            PRINT_RUNNER_DONE[data.taskId] = done;
+          });
+        } else if (targetClientId && targetClientId !== client.id && looksLikeClientId) {
+          // 目标为其他客户端，转发给中转服务
+          // 提取实际的打印机名称（去掉IP前缀）
+          let actualPrinterName = data.printer;
+          if (actualPrinterName && actualPrinterName.includes('] ')) {
+            actualPrinterName = actualPrinterName.substring(actualPrinterName.indexOf('] ') + 2);
+          }
+
+          // 确定目标客户端ID
+          // 如果targetClientId看起来像clientId，直接使用
+          // 否则从缓存查询
+          let clientIdForTransit = targetClientId;
+          if (!looksLikeClientId) {
+            // targetClientId可能不是clientId，需要从缓存查询
+            const printerParam = data.client || data.printer;
+            const cacheResult = queryPrinterCache(printerParam);
+            if (cacheResult) {
+              clientIdForTransit = cacheResult.clientId;
+              actualPrinterName = cacheResult.originalName || actualPrinterName;
+            } else {
+              clientIdForTransit = targetClientId; // 回退到原始值
+            }
+          }
+
+          // 将printer参数映射为client参数，供中转服务识别
+          // 中转服务期望"client"字段来识别目标客户端，而不是"printer"
+          const forwardData = {
+            ...data,
+            client: clientIdForTransit,  // 使用clientId而不是printer名称
+            printer: actualPrinterName  // 传递实际的打印机名称（去掉IP前缀）
+          };
+
+          client.emit("news", forwardData);
+        } else {
+          // 没有指定有效目标，按本地打印机处理
+
+          // 如果请求中包含 client 参数（中转服务转发的请求），需要将 client 转换回 printer
+          // 这是因为本机在发送请求时将 printer 映射为了 client，现在需要还原
+          if (data.client && !data.printer) {
+            data.printer = data.client;
+          }
+
+          PRINT_RUNNER.add((done) => {
+            data.socketId = client.id;
+            data.taskId = uuidv7();
+            data.clientType = "transit";
+
+            // 如果打印机名称包含IP前缀，需要去掉前缀
+            let printerName = data.printer;
+            if (printerName && printerName.includes('] ')) {
+              printerName = printerName.substring(printerName.indexOf('] ') + 2);
+              data.printer = printerName;
+            }
+
+            PRINT_WINDOW.webContents.send("print-new", data);
+            MAIN_WINDOW.webContents.send("printTask", true);
+            PRINT_RUNNER_DONE[data.taskId] = done;
+          });
+        }
+      } else {
+        // 这是本地打印请求（从本地web应用发送的）
+        const isLocalClientId = looksLikeClientId && targetClientId === global.LOCAL_CLIENT_ID;
+
+        if (isLocalClientId) {
+          // 目标为本机
+          // 如果请求中包含 client 参数（中转服务转发的请求），需要将 client 转换回 printer
+          // 这是因为本机在发送请求时将 printer 映射为了 client，现在需要还原
+          if (data.client && !data.printer) {
+            data.printer = data.client;
+          }
+
+          // 从 data.printer 中提取实际打印机名称
+          // data.printer 可能是 displayName "[IP] 打印机名称" 或原始打印机名称
+          let actualPrinterName = data.printer;
+          if (actualPrinterName && actualPrinterName.includes('] ')) {
+            actualPrinterName = actualPrinterName.substring(actualPrinterName.indexOf('] ') + 2);
+          }
+
+          PRINT_RUNNER.add((done) => {
+            data.socketId = client.id;
+            data.taskId = uuidv7();
+            data.clientType = "transit";
+            // 不修改 data.printer，保持原始的 displayName/clientId 用于结果反馈
+            // 但传递 actualPrinterName 给打印窗口
+            const printData = { ...data, printer: actualPrinterName };
+            PRINT_WINDOW.webContents.send("print-new", printData);
+            MAIN_WINDOW.webContents.send("printTask", true);
+            PRINT_RUNNER_DONE[data.taskId] = done;
+          });
+        } else if (targetClientId && targetClientId !== client.id && looksLikeClientId) {
+          // 目标为其他客户端，转发给中转服务
+          // 提取实际的打印机名称（去掉IP前缀）
+          let actualPrinterName = data.printer;
+          if (actualPrinterName && actualPrinterName.includes('] ')) {
+            actualPrinterName = actualPrinterName.substring(actualPrinterName.indexOf('] ') + 2);
+          }
+
+          // 确定目标客户端ID
+          // 如果targetClientId看起来像clientId，直接使用
+          // 否则从缓存查询
+          let clientIdForTransit = targetClientId;
+          if (!looksLikeClientId) {
+            // targetClientId可能不是clientId，需要从缓存查询
+            const printerParam = data.client || data.printer;
+            const cacheResult = queryPrinterCache(printerParam);
+            if (cacheResult) {
+              clientIdForTransit = cacheResult.clientId;
+              actualPrinterName = cacheResult.originalName || actualPrinterName;
+            } else {
+              clientIdForTransit = targetClientId; // 回退到原始值
+            }
+          }
+
+          // 将printer参数映射为client参数，供中转服务识别
+          // 中转服务期望"client"字段来识别目标客户端，而不是"printer"
+          const forwardData = {
+            ...data,
+            client: clientIdForTransit,  // 使用clientId而不是printer名称
+            printer: actualPrinterName  // 传递实际的打印机名称（去掉IP前缀）
+          };
+
+          client.emit("news", forwardData);
+        } else {
+          // 没有指定客户端ID或就是自己，按本地打印机处理
+          PRINT_RUNNER.add((done) => {
+            data.socketId = client.id;
+            data.taskId = uuidv7();
+            data.clientType = "transit";
+            PRINT_WINDOW.webContents.send("print-new", data);
+            MAIN_WINDOW.webContents.send("printTask", true);
+            PRINT_RUNNER_DONE[data.taskId] = done;
+          });
+        }
+      }
     }
   });
 
@@ -788,7 +1287,118 @@ function initClientEvent() {
    */
   client.on("disconnect", () => {
     console.log(`==> 中转服务 Disconnect: ${client.id}`);
-    MAIN_WINDOW.webContents.send("clientConnection", false);
+    if (MAIN_WINDOW && MAIN_WINDOW.webContents && !MAIN_WINDOW.isDestroyed()) {
+      MAIN_WINDOW.webContents.send("clientConnection", false);
+    } else {
+      console.log('MAIN_WINDOW 不可用，跳过发送断开状态');
+    }
+  });
+
+  /**
+   * @description: 中转服务返回打印机列表
+   * 注意：中转服务只给请求者返回汇总结果，其他客户端不会收到
+   * 但客户端仍然需要处理，以便更新缓存和匹配本机信息
+   */
+  client.on("printerList", (printers) => {
+    if (printers && printers.length > 0) {
+    }
+    console.log(`==> 中转服务返回打印机列表: ${printers ? printers.length : 'undefined'}台 <==`);
+
+    if (!global.TRANSIT_PRINTERS_CACHE) {
+      global.TRANSIT_PRINTERS_CACHE = {};
+    }
+
+    let list = [];
+    const cacheForRenderer = {};
+
+    // 首先获取本机 IP，用于匹配本机的 clientId
+    const localIp = _address.ip();
+
+    // 处理中转服务返回的打印列表
+    printers.forEach((item, index) => {
+      const server = item.server || {};
+      const clientId = server.clientId;
+      const nickName = server.nickName || '';
+      const ip = server.ip || '';
+
+      // 如果是本机的打印列表项，使用中转服务返回的 clientId 更新本机 clientId
+      if (ip && ip === localIp && clientId) {
+        global.LOCAL_CLIENT_ID = clientId;
+
+        // 同步到渲染进程
+        if (MAIN_WINDOW && MAIN_WINDOW.webContents) {
+          MAIN_WINDOW.webContents.executeJavaScript(`
+            window.localClientId = '${clientId}';
+            console.log('同步中转服务返回的 clientId 到渲染进程: ${clientId}');
+          `).catch((err) => {
+            console.error('同步到渲染进程失败:', err);
+          });
+        }
+
+        // 同步到设置窗口
+        if (SET_WINDOW && SET_WINDOW.webContents) {
+          SET_WINDOW.webContents.executeJavaScript(`
+            window.localClientId = '${clientId}';
+            console.log('同步中转服务返回的 clientId 到设置窗口: ${clientId}');
+          `).catch((err) => {
+            console.error('同步到设置窗口失败:', err);
+          });
+        }
+      }
+
+      // 构建客户端标识符
+      let clientLabel = '';
+      if (nickName && nickName.trim()) {
+        // 如果有昵称，优先显示昵称
+        clientLabel = nickName;
+      } else if (ip) {
+        // 如果没有昵称，显示IP
+        clientLabel = ip;
+      }
+
+      // 生成显示名称，格式：[客户端标识符] 打印机名称
+      const displayName = `${clientLabel ? `[${clientLabel}] ` : ''}${item.displayName || item.name || item}`;
+
+      // 存储客户端信息到缓存
+      if (clientId) {
+        global.TRANSIT_PRINTERS_CACHE[displayName] = {
+          displayName: displayName,
+          originalName: item.name || item,
+          server: server,
+          clientId: clientId  // 同时保存 clientId 到值中
+        };
+        cacheForRenderer[displayName] = {
+          clientId: clientId,
+          originalName: item.name || item
+        };
+        list.push({ label: displayName, value: displayName, clientId: clientId });
+      } else {
+        // 如果没有 clientId，视为本地打印机
+        const printerName = item.displayName || item.name || item;
+        list.push({ label: printerName, value: printerName });
+      }
+    });
+
+    // 发送到设置窗口（使用 SERVER 的 socket.id，而不是 CLIENT 的）
+    if (SET_WINDOW) {
+      SET_WINDOW.webContents.send("getPrintersList", { printers: list, cache: cacheForRenderer, clientId: global.LOCAL_CLIENT_ID });
+      // 同步缓存到设置窗口
+      SET_WINDOW.webContents.executeJavaScript(`
+        window.globalTransitPrinterCache = ${JSON.stringify(cacheForRenderer)};
+      `).catch((err) => {
+        console.error('同步缓存到设置窗口失败:', err);
+      });
+    }
+
+    // 同时同步到渲染进程的全局变量，保持一致性
+    // 这样可以在 print.js 中访问到缓存
+    if (MAIN_WINDOW && MAIN_WINDOW.webContents) {
+      MAIN_WINDOW.webContents.executeJavaScript(`
+        window.globalTransitPrinterCache = ${JSON.stringify(cacheForRenderer)};
+      `).catch((err) => {
+        console.error('同步缓存到主窗口失败:', err);
+      });
+    }
   });
 }
 

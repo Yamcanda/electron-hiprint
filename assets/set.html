@@ -581,6 +581,11 @@
                     clearable: true,
                   },
                   options: this.printerList,
+                  // 明确指定label和value字段，确保选择的是显示名称
+                  optionProps: {
+                    label: 'value',
+                    value: 'value'
+                  },
                   display: this.setTab === "advancedSet",
                 },
                 {
@@ -668,9 +673,39 @@
             //   ipcRenderer.on("downloadedVersions", (event, versions) => {
             //   this.downloadedVersions = versions;
             // })
-              ipcRenderer.on("getPrintersList", (event, printers) => {
-              this.printerList = printers;
-            });
+              ipcRenderer.on("getPrintersList", (event, data) => {
+                // 处理中转服务返回的打印机列表
+                if (data && data.printers) {
+                  // 中转服务返回的格式：{ printers: [...], cache: {...} }
+                  this.printerList = data.printers;
+                  // 将缓存信息存储到全局变量（使用显示名称作为key）
+                  window.globalTransitPrinterCache = data.cache || {};
+                  
+                  // 保存本机 clientId
+                  if (data.clientId) {
+                    window.localClientId = data.clientId;
+                    // 通知主进程更新 LOCAL_CLIENT_ID
+                    ipc.send('setLocalClientId', { clientId: data.clientId });
+                  } else {
+                    window.localClientId = null;
+                  }
+
+                  // 检查并修复默认打印机的显示名称
+                  this.fixDefaultPrinter();
+                } else {
+                  // 本地打印机列表格式：[...]
+                  this.printerList = data || [];
+                  window.globalTransitPrinterCache = {};
+                  window.localClientId = null;
+                }
+              });
+
+              // 监听测试打印错误事件
+              ipcRenderer.on("printTestError", (event, data) => {
+                if (data && data.message) {
+                  this.$message.error(data.message);
+                }
+              });
           },
           handleTabChange() {
             this.$nextTick(() => {
@@ -689,6 +724,10 @@
                 height,
               });
             });
+            // 当切换到高级设置标签页时，重新获取打印机列表
+            if (this.setTab === 'advancedSet') {
+              this.getPrintersList();
+            }
           },
           async testPrint() {
             const tempalteHtml = '<div style="height: 20px; width: 100%;">测试打印</div>';
@@ -703,14 +742,88 @@
             };
 
             if(this.formData.connectTransit) {
-              console.log("【debug】代理打印====");
-            //   ipcRenderer.send("do", data);
               data.clientType = "transit";
               data.replyId = 'rid-' + new Date().getTime();
-              // data.socketId = "transit";
+
+              // 如果没有本机 clientId，尝试从主进程获取
+              if (!window.localClientId) {
+                window.localClientId = await new Promise((resolve) => {
+                  ipc.send('getLocalClientId');
+                  const handler = (event, clientId) => {
+                    ipc.removeListener('localClientId', handler);
+                    resolve(clientId);
+                  };
+                  ipc.on('localClientId', handler);
+                  // 5秒超时
+                  setTimeout(() => {
+                    ipc.removeListener('localClientId', handler);
+                    resolve(null);
+                  }, 5000);
+                });
+              }
+
+              // 确保缓存已同步（等待打印机列表返回）
+              if (!window.globalTransitPrinterCache) {
+                await new Promise((resolve) => {
+                  const checkCache = () => {
+                    if (window.globalTransitPrinterCache) {
+                      resolve();
+                    } else {
+                      setTimeout(checkCache, 100);
+                    }
+                  };
+                  checkCache();
+                  // 5秒超时
+                  setTimeout(resolve, 5000);
+                });
+              }
+
+              // 如果选择了默认打印机，则设置 printer 参数
+              if(this.formData.defaultPrinter) {
+                // 从缓存中查找对应的 clientId
+                let cacheLookupResult = null;
+                if (window.globalTransitPrinterCache) {
+                  cacheLookupResult = window.globalTransitPrinterCache[this.formData.defaultPrinter];
+
+                  // 尝试模糊匹配（去掉末尾空格等）
+                  if (!cacheLookupResult) {
+                    for (const [key, value] of Object.entries(window.globalTransitPrinterCache)) {
+                      if (key.trim() === this.formData.defaultPrinter.trim()) {
+                        cacheLookupResult = value;
+                        break;
+                      }
+                    }
+                  }
+
+                  // 尝试部分匹配
+                  if (!cacheLookupResult) {
+                    for (const [key, value] of Object.entries(window.globalTransitPrinterCache)) {
+                      if (key.includes(this.formData.defaultPrinter) || this.formData.defaultPrinter.includes(key)) {
+                        cacheLookupResult = value;
+                        break;
+                      }
+                    }
+                  }
+                }
+
+                if (cacheLookupResult) {
+                  // 使用 displayName 作为 printer 参数，而不是 clientId
+                  // 因为同一客户端的多个打印机共享同一个 clientId，无法区分具体打印机
+                  data.printer = this.formData.defaultPrinter;
+                } else {
+                  // 缓存中没有，说明这是一个本地打印机，使用本机的 clientId
+                  data.printer = window.localClientId || '';
+
+                  // 添加错误提示，提醒用户重新选择默认打印机
+                  this.$message.error(`未找到匹配的打印机，请重新选择默认打印机`);
+                }
+              } else {
+                this.$message.error('请在 高级设置 中选择默认打印机进行打印测试');
+                return;
+              }
+
               ipc.send('print-new-test', data);
             } else {
-              console.log("【debug】非代理打印====");
               if(this.formData.defaultPrinter) {
                 data.printer = this.formData.defaultPrinter;
                 ipc.send('print-new-test', data);
@@ -824,6 +937,38 @@
            */
           getPrintersList() {
             ipcRenderer.send("getPrintersList"); // 请求打印机列表
+          },
+          /**
+           * @description: 修复默认打印机的显示名称
+           * @return {void}
+           */
+          fixDefaultPrinter() {
+            if (!this.formData.defaultPrinter) {
+              return;
+            }
+
+            // 如果默认打印机不包含IP前缀，说明它是原始名称，需要修复
+            if (!this.formData.defaultPrinter.includes("[") && !this.formData.defaultPrinter.includes("]")) {
+              // 检查缓存是否存在
+              if (window.globalTransitPrinterCache) {
+                // 遍历缓存，找到匹配的原始打印机名称
+                let foundDisplayName = null;
+                for (const [displayName, info] of Object.entries(window.globalTransitPrinterCache)) {
+                  // 如果缓存中的原始名称匹配当前默认打印机
+                  if (info.originalName === this.formData.defaultPrinter) {
+                    foundDisplayName = displayName;
+                    break;
+                  }
+                }
+
+                if (foundDisplayName) {
+                  this.formData.defaultPrinter = foundDisplayName;
+
+                  // 保存修复后的值到 store
+                  ipc.send('updateDefaultPrinter', { defaultPrinter: foundDisplayName });
+                }
+              }
+            }
           },
         },
       });

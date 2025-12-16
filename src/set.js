@@ -352,6 +352,20 @@ function initSetEvent() {
   ipcMain.on("closeSetWindow", closeSetWindow);
   ipcMain.on("downloadPlugin", downloadPlugin);
   ipcMain.on("getPrintersList", getPrintersList);
+
+  // 接收设置窗口发来的本机 clientId
+  ipcMain.on("setLocalClientId", (event, data) => {
+    if (data && data.clientId) {
+      global.LOCAL_CLIENT_ID = data.clientId;
+    }
+  });
+
+  // 接收设置窗口发来的修复后的默认打印机
+  ipcMain.on("updateDefaultPrinter", (event, data) => {
+    if (data && data.defaultPrinter) {
+      store.set("defaultPrinter", data.defaultPrinter);
+    }
+  });
 }
 
 /**
@@ -368,6 +382,8 @@ function removeEvent() {
   ipcMain.removeListener("closeSetWindow", closeSetWindow);
   ipcMain.removeListener("downloadPlugin", downloadPlugin);
   ipcMain.removeListener("getPrintersList", getPrintersList);
+  ipcMain.removeListener("setLocalClientId", () => {});
+  ipcMain.removeListener("updateDefaultPrinter", () => {});
   SET_WINDOW = null;
 }
 
@@ -392,11 +408,25 @@ function getDownloadedVersions() {
  */
 async function getPrintersList(event) {
   try {
-    const printers = await SET_WINDOW.webContents.getPrintersAsync();
-    let list = printers.map((item) => {
-      return { value: item.name };
-    });
-    SET_WINDOW.webContents.send("getPrintersList", list);
+    // 判断是否连接中转服务
+    const connectTransit = store.get("connectTransit");
+
+    if (connectTransit && global.SOCKET_CLIENT && global.SOCKET_CLIENT.connected) {
+      // 如果已连接中转服务，请求中转服务刷新打印机列表
+      console.log("==> 请求中转服务刷新打印机列表 <==");
+      global.SOCKET_CLIENT.emit("refreshPrinterList");
+    } else {
+      // 否则获取本地打印机列表
+      console.log("==> 获取本地打印机列表 <==");
+      const printers = await SET_WINDOW.webContents.getPrintersAsync();
+      let list = printers.map((item) => {
+        return { value: item.name };
+      });
+      SET_WINDOW.webContents.send("getPrintersList", {
+        printers: list,
+        clientId: global.LOCAL_CLIENT_ID || null
+      });
+    }
   } catch (error) {
     console.error("获取打印机列表失败:", error);
     SET_WINDOW.webContents.send("getPrintersList", []);
