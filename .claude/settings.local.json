@@ -1,0 +1,13 @@
+{
+  "enabledMcpjsonServers": [
+    "context7",
+    "sequentialthinking",
+    "serena",
+    "chrome-devtools"
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(npm run build-w-64)"
+    ]
+  }
+}

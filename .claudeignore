@@ -1,0 +1,10 @@
+.history
+
+.gitignore
+.vscode
+.cursor
+
+out
+node_modules
+
+build.bat
