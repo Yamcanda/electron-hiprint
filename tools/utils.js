@@ -71,15 +71,32 @@ if (fs.existsSync(buildInfoPath)) {
 }
 
 /**
- * @description: 安全调用 getPaperSizeInfoAll, 添加错误处理和路径修复
+ * @description: 安全调用 getPaperSizeInfoAll, 添加错误处理和重试机制
  * 由于 win32-pdf-printer 包在处理包含空格的路径时存在问题，添加包装函数
  */
 function safeGetPaperSizeInfoAll() {
-  try {
-    return getPaperSizeInfoAll();
-  } catch (error) {
-    console.error("safeGetPaperSizeInfoAll 调用失败:", error.message);
-    return [];
+  const maxRetries = 3;
+  let retryCount = 0;
+
+  while (retryCount < maxRetries) {
+    try {
+      const result = getPaperSizeInfoAll();
+      return result;
+    } catch (error) {
+      retryCount++;
+      if (retryCount >= maxRetries) {
+        console.error(`safeGetPaperSizeInfoAll 调用失败 (已重试 ${maxRetries} 次):`, error.message);
+        return [];
+      }
+      // 等待一段时间后重试，避免频繁调用导致的问题
+      const delay = 100 * retryCount; // 递增延迟：100ms, 200ms
+      console.warn(`safeGetPaperSizeInfoAll 第 ${retryCount} 次调用失败，${delay}ms 后重试...`);
+      // 简单的延迟循环
+      const startTime = Date.now();
+      while (Date.now() - startTime < delay) {
+        // 延迟循环
+      }
+    }
   }
 }
 
@@ -1468,13 +1485,47 @@ function initClientEvent() {
 function getCurrentPrintStatusByName(printerName) {
   if (process.platform === "win32") {
     try {
+      // 先尝试使用缓存的结果，避免频繁调用 win32-pdf-printer
+      const cacheKey = `printer_status_${printerName}`;
+      const cachedResult = global.PRINTER_STATUS_CACHE?.[cacheKey];
+      const now = Date.now();
+
+      // 如果缓存存在且未过期（5秒内），直接返回缓存结果
+      if (cachedResult && (now - cachedResult.timestamp < 5000)) {
+        return cachedResult.data;
+      }
+
       const paperList = safeGetPaperSizeInfoAll();
       const printerInfo = paperList.find(
         (item) => item.PrinterName === printerName,
       );
-      return {
+
+      const result = {
         StatusMsg: printerInfo?.StatusMsg || "未找到打印机",
       };
+
+      // 初始化缓存对象
+      if (!global.PRINTER_STATUS_CACHE) {
+        global.PRINTER_STATUS_CACHE = {};
+      }
+
+      // 缓存结果
+      global.PRINTER_STATUS_CACHE[cacheKey] = {
+        data: result,
+        timestamp: now,
+      };
+
+      // 清理过期缓存（保留最近100个）
+      const cacheKeys = Object.keys(global.PRINTER_STATUS_CACHE);
+      if (cacheKeys.length > 100) {
+        const sortedKeys = cacheKeys.sort((a, b) =>
+          global.PRINTER_STATUS_CACHE[a].timestamp - global.PRINTER_STATUS_CACHE[b].timestamp
+        );
+        const keysToDelete = sortedKeys.slice(0, cacheKeys.length - 100);
+        keysToDelete.forEach(key => delete global.PRINTER_STATUS_CACHE[key]);
+      }
+
+      return result;
     } catch (error) {
       console.error("获取打印机状态失败:", error.message);
       return {

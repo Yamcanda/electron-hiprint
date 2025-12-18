@@ -167,7 +167,7 @@ function initPrintEvent() {
 
   ipcMain.on("print-new-test", async (event, data) => {
     const jsonData = JSON.stringify(data);
-    console.log(`"【debug】print-new-test 测试打印：" ${jsonData}`);
+    // console.log(`"【debug】print-new-test 测试打印：" ${jsonData}`);
     
     // 获取本机 clientId
     let localClientId = null;
@@ -350,14 +350,19 @@ function initPrintEvent() {
       }
       // 判断打印机是否存在
       if (element.name === defaultPrinter) {
-        // todo: 打印机状态对照表
+        // 打印机状态检查优化：只有在明确的错误状态时才认为异常
         // win32: https://learn.microsoft.com/en-us/windows/win32/printdocs/printer-info-2
-        // cups: https://www.cups.org/doc/cupspm.html#ipp_status_e
+        // 状态值说明：0=空闲，1=暂停，2=错误，3=打印中，4=预热，5=停止，6=离线
         if (process.platform === "win32") {
-          if (element.status != 0) {
+          // 只有在明确的错误状态（2=错误，5=停止，6=离线）时才认为异常
+          // 状态 0=空闲, 1=暂停, 3=打印中, 4=预热 都是正常的
+          // if (element.status === 2 || element.status === 5 || element.status === 6) {
+          if (![0, 512, 1024].includes(element.status)) {
             printerError = true;
           }
         } else {
+          // Unix/Linux 系统，只有明确的错误状态才认为异常
+          // cups 状态：3=idle（空闲），5=stopped（停止），其他状态需要具体判断
           if (element.status != 3) {
             printerError = true;
           }
@@ -658,6 +663,12 @@ function initPrintEvent() {
         });
       return;
     }
+
+    // 批量打印时，在打印前等待一小段时间，避免竞态条件
+    // if (data.batchPrint) {
+    //   await new Promise(resolve => setTimeout(resolve, 200));
+    // }
+
     // 打印 详见https://www.electronjs.org/zh/docs/latest/api/web-contents
     PRINT_WINDOW.webContents.print(
       {
@@ -682,7 +693,7 @@ function initPrintEvent() {
       },
       (success, failureReason) => {
         const debugHtmlData = data.html;
-        const codeNumMatch = "测试打印";
+        let codeNumMatch = "测试打印";
         if(debugHtmlData.indexOf(codeNumMatch) < 0) {
           const codeNumReg = /<div[^>]*>(\d{10,16})<\/div>/;
           const match = debugHtmlData.match(codeNumReg);
