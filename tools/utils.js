@@ -312,7 +312,8 @@ function queryPrinterCache(printerName) {
     }
 
     // 如果是 clientId 格式，遍历查找匹配项
-    const looksLikeClientId = printerName && printerName.length >= 15;
+    // socket.io clientId 是纯字母数字字符串，不含空格和特殊字符
+    const looksLikeClientId = printerName && printerName.length >= 15 && /^[a-zA-Z0-9_-]+$/.test(printerName);
     if (looksLikeClientId) {
       for (const [displayName, info] of Object.entries(global.TRANSIT_PRINTERS_CACHE)) {
         if (info.clientId === printerName) {
@@ -365,7 +366,8 @@ function isLocalPrinter(printerName) {
     }
 
     // 如果printerName看起来像clientId，检查是否为本机clientId
-    const looksLikeClientId = printerName && printerName.length >= 15;
+    // socket.io clientId 是纯字母数字字符串，不含空格和特殊字符
+    const looksLikeClientId = printerName && printerName.length >= 15 && /^[a-zA-Z0-9_-]+$/.test(printerName);
     if (looksLikeClientId) {
       if (printerName === global.LOCAL_CLIENT_ID) {
         return true;
@@ -784,11 +786,17 @@ function initServeEvent(server) {
       if (data) {
         // 检查是否指定了目标客户端 (printer 参数可能是 clientId)
         const targetClientId = data.printer;
-        const looksLikeClientId = targetClientId && targetClientId.length >= 15;
+        // socket.io clientId 是纯字母数字字符串，不含空格和特殊字符
+        const looksLikeClientId = targetClientId && targetClientId.length >= 15 && /^[a-zA-Z0-9_-]+$/.test(targetClientId);
         const isLocalClientId = looksLikeClientId && targetClientId === global.LOCAL_CLIENT_ID;
+
+        const jsonData = JSON.stringify(data);
+        // console.log(`【Debug】data: ${jsonData}`);
+        // console.log(`【Debug】looksLikeClientId: ${looksLikeClientId} ，isLocalClientId：${isLocalClientId}，global.LOCAL_CLIENT_ID: ${global.LOCAL_CLIENT_ID}`);
 
         // 如果是本机的客户端ID，在本机执行打印
         if (isLocalClientId) {
+          // console.log(`客户端(本地) ${targetClientId} ，打印机：${data.printer}`);
           // 使用本机实际打印机名称，而不是 clientId
           // 去掉前缀 [IP地址] 获取纯打印机名称
           let localPrinter = store.get("defaultPrinter") || "";
@@ -807,6 +815,8 @@ function initServeEvent(server) {
             PRINT_RUNNER_DONE[data.taskId] = done;
           });
         } else if (targetClientId && targetClientId !== socket.id && looksLikeClientId) {
+          // console.log(`【debug】客户端(远程) ${targetClientId} ，打印机：${data.printer}`);
+
           // 检查是否是远程客户端ID，如果是远程但未连接中转服务，给出提示
           const cacheResult = queryPrinterCache(data.printer);
           if (cacheResult && (!global.SOCKET_CLIENT || !global.SOCKET_CLIENT.connected)) {
@@ -824,8 +834,10 @@ function initServeEvent(server) {
           const targetSocket = SOCKET_SERVER.sockets.sockets.get(targetClientId);
 
           if (targetSocket) {
+            // console.log(`【Debug】客户端(远程-转发给目标客户端) ${targetClientId} ，打印机：${data.printer}`);
             targetSocket.emit("news", data);
           } else {
+            // console.log(`【Debug】客户端(远程-转发给中央中转服务) ${targetClientId} ，打印机：${data.printer}`);
             // 如果连接了中央中转服务，转发给中央中转服务
             if (global.SOCKET_CLIENT && global.SOCKET_CLIENT.connected) {
 
@@ -838,9 +850,10 @@ function initServeEvent(server) {
               // 确定目标客户端ID
               // 如果targetClientId看起来像clientId，直接使用
               // 否则从缓存查询
-              const looksLikeClientId = targetClientId && targetClientId.length >= 15;
+              // socket.io clientId 是纯字母数字字符串，不含空格和特殊字符
+              const looksLikeClientIdInner = targetClientId && targetClientId.length >= 15 && /^[a-zA-Z0-9_-]+$/.test(targetClientId);
 
-              if (!looksLikeClientId) {
+              if (!looksLikeClientIdInner) {
                 // printer可能是显示名称，需要从缓存查询clientId
                 const cacheResult = queryPrinterCache(data.printer);
                 if (cacheResult) {
@@ -869,6 +882,7 @@ function initServeEvent(server) {
             }
           }
         } else {
+          // console.log(`【Debug】客户端(未指定) ${targetClientId} ，打印机：${data.printer}`);
           // 没有指定目标客户端或就是自己，在本地执行打印
           PRINT_RUNNER.add((done) => {
             data.socketId = socket.id;
@@ -1148,7 +1162,8 @@ function initClientEvent() {
       // 检查是否指定了目标客户端 (printer 或 client 参数可能是 clientId)
       // 注意：中转服务转发时会将 printer 映射为 client
       const targetClientId = data.client || data.printer;
-      const looksLikeClientId = targetClientId && targetClientId.length >= 15;
+      // socket.io clientId 是纯字母数字字符串，不含空格和特殊字符
+      const looksLikeClientId = targetClientId && targetClientId.length >= 15 && /^[a-zA-Z0-9_-]+$/.test(targetClientId);
 
       // 只有当这个打印请求不是来自本地（replyId存在），才需要转发到其他客户端
       // 如果是本地的打印请求，需要检查目标是否为本机
