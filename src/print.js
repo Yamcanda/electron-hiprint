@@ -350,13 +350,12 @@ function initPrintEvent() {
       }
       // 判断打印机是否存在
       if (element.name === defaultPrinter) {
-        // 打印机状态检查优化：只有在明确的错误状态时才认为异常
+        // 打印机状态检查, 打印机状态对照表
         // win32: https://learn.microsoft.com/en-us/windows/win32/printdocs/printer-info-2
-        // 状态值说明：0=空闲，1=暂停，2=错误，3=打印中，4=预热，5=停止，6=离线
+        // cups: https://www.cups.org/doc/cupspm.html#ipp_status_e
         if (process.platform === "win32") {
-          // 只有在明确的错误状态（2=错误，5=停止，6=离线）时才认为异常
-          // 状态 0=空闲, 1=暂停, 3=打印中, 4=预热 都是正常的
-          // if (element.status === 2 || element.status === 5 || element.status === 6) {
+          // 512 忙(Busy）
+          // 1024 正在打印（Printing）
           if (![0, 512, 1024].includes(element.status)) {
             printerError = true;
           }

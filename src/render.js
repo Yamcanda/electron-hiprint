@@ -331,16 +331,18 @@ async function printFun(event, data) {
     }
     // 判断打印机是否存在
     if (element.name === defaultPrinter) {
-      // todo: 打印机状态对照表
+      // 打印机状态检查, 打印机状态对照表
       // win32: https://learn.microsoft.com/en-us/windows/win32/printdocs/printer-info-2
       // cups: https://www.cups.org/doc/cupspm.html#ipp_status_e
       if (process.platform === "win32") {
-          // 512 忙(Busy）
-          // 1024 正在打印（Printing）
+        // 512 忙(Busy）
+        // 1024 正在打印（Printing）
         if (![0, 512, 1024].includes(element.status)) {
           printerError = true;
         }
       } else {
+        // Unix/Linux 系统，只有明确的错误状态才认为异常
+          // cups 状态：3=idle（空闲），5=stopped（停止），其他状态需要具体判断
         if (element.status != 3) {
           printerError = true;
         }
